@@ -173,4 +173,10 @@ class ModelDownloader(private val context: Context) {
     companion object {
         private const val TAG = "ModelDownloader"
     }
+
+    fun getModelPath(filename: String): String {
+        val modelsDir = getModelsDir()
+        val modelFile = File(modelsDir, filename)
+        return modelFile.absolutePath
+    }
 } 

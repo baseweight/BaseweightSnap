@@ -294,8 +294,27 @@ class MainActivity : AppCompatActivity() {
             showResponseText("Downloading models...")
             modelDownloader.downloadModels { success, errorMessage ->
                 if (success) {
-                    showResponseText("Models downloaded successfully!")
-                    Toast.makeText(this@MainActivity, "Models downloaded successfully", Toast.LENGTH_LONG).show()
+                    // Get the paths to the downloaded models
+                    val visionModelPath = modelDownloader.getModelPath("vision_model.onnx")
+                    val embedModelPath = modelDownloader.getModelPath("embed_model.onnx")
+                    val decoderModelPath = modelDownloader.getModelPath("decoder_model.onnx")
+                    val vocabPath = modelDownloader.getModelPath("vocab.txt")
+
+                    // Initialize SmolVLM
+                    val initSuccess = initializeSmolVLM(
+                        visionModelPath,
+                        embedModelPath,
+                        decoderModelPath,
+                        vocabPath
+                    )
+
+                    if (initSuccess) {
+                        showResponseText("Models downloaded and initialized successfully!")
+                        Toast.makeText(this@MainActivity, "Models downloaded and initialized successfully", Toast.LENGTH_LONG).show()
+                    } else {
+                        showResponseText("Error initializing models")
+                        Toast.makeText(this@MainActivity, "Error initializing models", Toast.LENGTH_LONG).show()
+                    }
                 } else {
                     showResponseText("Error downloading models: $errorMessage")
                     Toast.makeText(this@MainActivity, "Error downloading models: $errorMessage", Toast.LENGTH_LONG).show()
@@ -303,6 +322,14 @@ class MainActivity : AppCompatActivity() {
             }
         }
     }
+
+    // Native method declarations
+    private external fun initializeSmolVLM(
+        visionModelPath: String,
+        embedModelPath: String,
+        decoderModelPath: String,
+        vocabPath: String
+    ): Boolean
 
     private fun describeImage() {
         downloadModels()
