@@ -20,8 +20,10 @@ std::vector<float> ImageProcessor::preprocess(const cv::Mat& image, int target_w
     resized.convertTo(floatImage, CV_32F, 1.0 / 255.0);
 
     // Normalize with mean and std
-    std::vector<float> mean = {0.48145466, 0.4578275, 0.40821073};
-    std::vector<float> std = {0.26862954, 0.26130258, 0.27577711};
+    // Values were taken from config loaded from here:
+    // https://huggingface.co/HuggingFaceTB/SmolVLM2-500M-Video-Instruct/discussions/14
+    std::vector<float> mean = {0.5, 0.5, 0.5};
+    std::vector<float> std = {0.5, 0.5, 0.5};
 
     std::vector<cv::Mat> channels(3);
     cv::split(floatImage, channels);

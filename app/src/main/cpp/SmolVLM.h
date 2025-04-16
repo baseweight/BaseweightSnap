@@ -26,7 +26,8 @@ private:
     SmolVLM(const std::string& vision_model_path,
             const std::string& embed_model_path,
             const std::string& decoder_model_path,
-            const std::string& vocab_path);
+            const std::string& vocab_path,
+            const std::string& tokenizer_path);
 
     // ONNX Runtime session pointers
     Ort::Session vision_session;
@@ -68,10 +69,12 @@ public:
     static void initialize(const std::string& vision_model_path,
                           const std::string& embed_model_path,
                           const std::string& decoder_model_path,
-                          const std::string& vocab_path) {
+                          const std::string& vocab_path,
+                          const std::string& tokenizer_path) {
         if (!instance) {
             instance = std::unique_ptr<SmolVLM>(
-                new SmolVLM(vision_model_path, embed_model_path, decoder_model_path, vocab_path)
+                new SmolVLM(vision_model_path, embed_model_path, decoder_model_path, 
+                           vocab_path, tokenizer_path)
             );
         }
     }

@@ -18,7 +18,8 @@ Java_ai_baseweight_baseweightsnap_MainActivity_initializeSmolVLM(
         jstring vision_model_path,
         jstring embed_model_path,
         jstring decoder_model_path,
-        jstring vocab_path) {
+        jstring vocab_path,
+        jstring tokenizer_path) {
     
     try {
         // Convert Java strings to C++ strings
@@ -26,19 +27,22 @@ Java_ai_baseweight_baseweightsnap_MainActivity_initializeSmolVLM(
         const char* embed_path = env->GetStringUTFChars(embed_model_path, nullptr);
         const char* decoder_path = env->GetStringUTFChars(decoder_model_path, nullptr);
         const char* vocab_path_str = env->GetStringUTFChars(vocab_path, nullptr);
+        const char* tokenizer_path_str = env->GetStringUTFChars(tokenizer_path, nullptr);
 
         LOGI("Initializing SmolVLM with models:");
         LOGI("Vision model: %s", vision_path);
         LOGI("Embed model: %s", embed_path);
         LOGI("Decoder model: %s", decoder_path);
         LOGI("Vocab file: %s", vocab_path_str);
+        LOGI("Tokenizer config: %s", tokenizer_path_str);
 
         // Initialize the SmolVLM singleton
         SmolVLM::initialize(
             std::string(vision_path),
             std::string(embed_path),
             std::string(decoder_path),
-            std::string(vocab_path_str)
+            std::string(vocab_path_str),
+            std::string(tokenizer_path_str)
         );
 
         // Release the strings
@@ -46,6 +50,7 @@ Java_ai_baseweight_baseweightsnap_MainActivity_initializeSmolVLM(
         env->ReleaseStringUTFChars(embed_model_path, embed_path);
         env->ReleaseStringUTFChars(decoder_model_path, decoder_path);
         env->ReleaseStringUTFChars(vocab_path, vocab_path_str);
+        env->ReleaseStringUTFChars(tokenizer_path, tokenizer_path_str);
 
         LOGI("SmolVLM initialized successfully");
         return JNI_TRUE;

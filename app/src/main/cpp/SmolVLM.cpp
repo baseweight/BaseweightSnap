@@ -36,9 +36,10 @@ Ort::Value SmolVLM::createTensor(const std::vector<T>& data, const std::vector<i
 SmolVLM::SmolVLM(const std::string& vision_model_path,
                  const std::string& embed_model_path,
                  const std::string& decoder_model_path,
-                 const std::string& vocab_path)
+                 const std::string& vocab_path,
+                 const std::string& tokenizer_path)
     : env(ORT_LOGGING_LEVEL_WARNING, "SmolVLM"),
-      tokenizer(vocab_path),
+      tokenizer(vocab_path, tokenizer_path),
       vision_session(env, vision_model_path.c_str(), session_options),
       embed_session(env, embed_model_path.c_str(), session_options),
       decoder_session(env, decoder_model_path.c_str(), session_options) {
@@ -47,14 +48,15 @@ SmolVLM::SmolVLM(const std::string& vision_model_path,
     session_options.SetIntraOpNumThreads(1);
     session_options.SetGraphOptimizationLevel(GraphOptimizationLevel::ORT_ENABLE_ALL);
     
+    // Get special token IDs from tokenizer
+    eos_token_id = tokenizer.getEosTokenId();
+    image_token_id = tokenizer.getImageTokenId();
+    
     // Initialize model configuration
-    // Taken from the model config that came from here
-    // https://huggingface.co/HuggingFaceTB/SmolVLM2-500M-Video-Instruct/discussions/14
-    num_key_value_heads = 5;
-    head_dim = 64;
+    // TODO: Load these values from model config
+    num_key_value_heads = 32;
+    head_dim = 128;
     num_hidden_layers = 32;
-    eos_token_id = 2;
-    image_token_id = 49190;
 }
 
 std::string SmolVLM::generateText(const std::string& prompt, const cv::Mat& image, int max_new_tokens = 1024) {

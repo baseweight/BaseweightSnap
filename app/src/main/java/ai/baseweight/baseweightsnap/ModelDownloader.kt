@@ -179,4 +179,32 @@ class ModelDownloader(private val context: Context) {
         val modelFile = File(modelsDir, filename)
         return modelFile.absolutePath
     }
+
+    fun copyTokenizerFiles(): Pair<String, String> {
+        val modelsDir = getModelsDir()
+        
+        // Copy vocab.json
+        val vocabFile = File(modelsDir, "vocab.json")
+        if (!vocabFile.exists()) {
+            context.assets.open("vocab.json").use { input ->
+                FileOutputStream(vocabFile).use { output ->
+                    input.copyTo(output)
+                }
+            }
+            Log.d(TAG, "Copied vocab.json to ${vocabFile.absolutePath}")
+        }
+
+        // Copy tokenizer.json
+        val tokenizerFile = File(modelsDir, "tokenizer.json")
+        if (!tokenizerFile.exists()) {
+            context.assets.open("tokenizer.json").use { input ->
+                FileOutputStream(tokenizerFile).use { output ->
+                    input.copyTo(output)
+                }
+            }
+            Log.d(TAG, "Copied tokenizer.json to ${tokenizerFile.absolutePath}")
+        }
+
+        return Pair(vocabFile.absolutePath, tokenizerFile.absolutePath)
+    }
 } 

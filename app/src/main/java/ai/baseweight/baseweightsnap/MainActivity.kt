@@ -294,18 +294,21 @@ class MainActivity : AppCompatActivity() {
             showResponseText("Downloading models...")
             modelDownloader.downloadModels { success, errorMessage ->
                 if (success) {
+                    // Copy tokenizer files from assets
+                    val (vocabPath, tokenizerPath) = modelDownloader.copyTokenizerFiles()
+                    
                     // Get the paths to the downloaded models
                     val visionModelPath = modelDownloader.getModelPath("vision_model.onnx")
                     val embedModelPath = modelDownloader.getModelPath("embed_model.onnx")
                     val decoderModelPath = modelDownloader.getModelPath("decoder_model.onnx")
-                    val vocabPath = modelDownloader.getModelPath("vocab.txt")
 
                     // Initialize SmolVLM
                     val initSuccess = initializeSmolVLM(
                         visionModelPath,
                         embedModelPath,
                         decoderModelPath,
-                        vocabPath
+                        vocabPath,
+                        tokenizerPath
                     )
 
                     if (initSuccess) {
@@ -328,7 +331,8 @@ class MainActivity : AppCompatActivity() {
         visionModelPath: String,
         embedModelPath: String,
         decoderModelPath: String,
-        vocabPath: String
+        vocabPath: String,
+        tokenizerPath: String
     ): Boolean
 
     private fun describeImage() {
