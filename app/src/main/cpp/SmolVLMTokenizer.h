@@ -2,8 +2,8 @@
 // Created by bowserj on 4/15/25.
 //
 
-#ifndef BASEWEIGHTSNAP_SMOLVLMTokenizer_H
-#define BASEWEIGHTSNAP_SMOLVLMTokenizer_H
+#ifndef BASEWEIGHTSNAP_SMOLVLMTOKENIZER_H
+#define BASEWEIGHTSNAP_SMOLVLMTOKENIZER_H
 
 #include <string>
 #include <vector>
@@ -14,12 +14,16 @@
 #include <memory>
 #include "rapidjson/document.h"
 #include "rapidjson/istreamwrapper.h"
+#include "rapidjson/error/en.h"
 
 class SmolVLMTokenizer {
 private:
     // Vocabulary mapping
-    std::unordered_map<std::string, int> vocab;
-    std::unordered_map<int, std::string> inv_vocab;
+    std::unordered_map<std::string, int> token_to_id;
+    std::unordered_map<int, std::string> id_to_token;
+    
+    // BPE merge rules
+    std::unordered_map<std::string, int> bpe_ranks;
     
     // Special tokens
     int bos_token_id;
@@ -27,9 +31,6 @@ private:
     int pad_token_id;
     int unk_token_id;
     int image_token_id;
-    
-    // BPE merges
-    std::vector<std::pair<std::string, std::string>> merges;
     
     // Load vocabulary from JSON file
     void loadVocab(const std::string& vocab_path);
@@ -41,6 +42,8 @@ private:
     std::vector<std::string> bpe(const std::string& token);
     std::vector<std::string> whitespaceTokenize(const std::string& text);
     std::string cleanText(const std::string& text);
+    std::vector<std::string> splitIntoChars(const std::string& word);
+    std::vector<std::pair<std::string, std::string>> getPairs(const std::vector<std::string>& word);
     
 public:
     SmolVLMTokenizer(const std::string& vocab_path, const std::string& config_path);
@@ -62,4 +65,4 @@ public:
     int getImageTokenId() const { return image_token_id; }
 };
 
-#endif //BASEWEIGHTSNAP_SMOLVLMTokenizer_H
+#endif //BASEWEIGHTSNAP_SMOLVLMTOKENIZER_H

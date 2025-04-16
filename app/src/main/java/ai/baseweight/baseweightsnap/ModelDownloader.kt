@@ -119,6 +119,58 @@ class ModelDownloader(private val context: Context) {
         }
     }
 
+    fun copyTokenizerFiles(): Pair<String, String> {
+        val modelsDir = getModelsDir()
+        
+        // Copy vocab.json
+        val vocabFile = File(modelsDir, "vocab.json")
+        if (!vocabFile.exists()) {
+            context.assets.open("vocab.json").use { input ->
+                FileOutputStream(vocabFile).use { output ->
+                    input.copyTo(output)
+                }
+            }
+            Log.d(TAG, "Copied vocab.json to ${vocabFile.absolutePath}")
+        }
+
+        // Copy tokenizer.json
+        val tokenizerFile = File(modelsDir, "tokenizer.json")
+        if (!tokenizerFile.exists()) {
+            context.assets.open("tokenizer.json").use { input ->
+                FileOutputStream(tokenizerFile).use { output ->
+                    input.copyTo(output)
+                }
+            }
+            Log.d(TAG, "Copied tokenizer.json to ${tokenizerFile.absolutePath}")
+        }
+
+        return Pair(vocabFile.absolutePath, tokenizerFile.absolutePath)
+    }
+
+    private fun initializeSmolVLM(): Boolean {
+        try {
+            // Copy tokenizer files from assets
+            val (vocabPath, tokenizerPath) = copyTokenizerFiles()
+            
+            // Get the paths to the downloaded models
+            val visionModelPath = getModelPath("vision_encoder.onnx")
+            val embedModelPath = getModelPath("embed_tokens.onnx")
+            val decoderModelPath = getModelPath("decoder_model_merged.onnx")
+
+            // Initialize SmolVLM
+            return initializeSmolVLM(
+                visionModelPath,
+                embedModelPath,
+                decoderModelPath,
+                vocabPath,
+                tokenizerPath
+            )
+        } catch (e: Exception) {
+            Log.e(TAG, "Error initializing SmolVLM", e)
+            return false
+        }
+    }
+
     suspend fun downloadModels(callback: (Boolean, String?) -> Unit) {
         withContext(Dispatchers.Main) {
             callback(true, null) // Start callback
@@ -154,6 +206,14 @@ class ModelDownloader(private val context: Context) {
                 }
             }
 
+            // If downloads were successful, initialize SmolVLM
+            if (success) {
+                success = initializeSmolVLM()
+                if (!success) {
+                    errorMessage = "Failed to initialize SmolVLM"
+                }
+            }
+
             // Log final state of all model files
             Log.d(TAG, "Final model files state:")
             for (model in models) {
@@ -172,6 +232,11 @@ class ModelDownloader(private val context: Context) {
 
     companion object {
         private const val TAG = "ModelDownloader"
+
+        // Used to load the 'baseweightsnap' library on application startup.
+        init {
+            System.loadLibrary("baseweightsnap")
+        }
     }
 
     fun getModelPath(filename: String): String {
@@ -180,31 +245,12 @@ class ModelDownloader(private val context: Context) {
         return modelFile.absolutePath
     }
 
-    fun copyTokenizerFiles(): Pair<String, String> {
-        val modelsDir = getModelsDir()
-        
-        // Copy vocab.json
-        val vocabFile = File(modelsDir, "vocab.json")
-        if (!vocabFile.exists()) {
-            context.assets.open("vocab.json").use { input ->
-                FileOutputStream(vocabFile).use { output ->
-                    input.copyTo(output)
-                }
-            }
-            Log.d(TAG, "Copied vocab.json to ${vocabFile.absolutePath}")
-        }
-
-        // Copy tokenizer.json
-        val tokenizerFile = File(modelsDir, "tokenizer.json")
-        if (!tokenizerFile.exists()) {
-            context.assets.open("tokenizer.json").use { input ->
-                FileOutputStream(tokenizerFile).use { output ->
-                    input.copyTo(output)
-                }
-            }
-            Log.d(TAG, "Copied tokenizer.json to ${tokenizerFile.absolutePath}")
-        }
-
-        return Pair(vocabFile.absolutePath, tokenizerFile.absolutePath)
-    }
+    // Native method declarations
+    private external fun initializeSmolVLM(
+        visionModelPath: String,
+        embedModelPath: String,
+        decoderModelPath: String,
+        vocabPath: String,
+        tokenizerPath: String
+    ): Boolean
 } 

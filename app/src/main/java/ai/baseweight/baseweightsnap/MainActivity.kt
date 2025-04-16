@@ -3,6 +3,7 @@ package ai.baseweight.baseweightsnap
 import android.Manifest
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.graphics.Bitmap
 import android.net.Uri
 import android.os.Bundle
 import android.view.View
@@ -19,11 +20,13 @@ import androidx.camera.core.Preview
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
+import androidx.core.graphics.drawable.toBitmap
 import ai.baseweight.baseweightsnap.databinding.ActivityMainBinding
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import java.io.File
+import java.nio.ByteBuffer
 import java.text.SimpleDateFormat
 import java.util.Locale
 import java.util.concurrent.ExecutorService
@@ -294,30 +297,8 @@ class MainActivity : AppCompatActivity() {
             showResponseText("Downloading models...")
             modelDownloader.downloadModels { success, errorMessage ->
                 if (success) {
-                    // Copy tokenizer files from assets
-                    val (vocabPath, tokenizerPath) = modelDownloader.copyTokenizerFiles()
-                    
-                    // Get the paths to the downloaded models
-                    val visionModelPath = modelDownloader.getModelPath("vision_model.onnx")
-                    val embedModelPath = modelDownloader.getModelPath("embed_model.onnx")
-                    val decoderModelPath = modelDownloader.getModelPath("decoder_model.onnx")
-
-                    // Initialize SmolVLM
-                    val initSuccess = initializeSmolVLM(
-                        visionModelPath,
-                        embedModelPath,
-                        decoderModelPath,
-                        vocabPath,
-                        tokenizerPath
-                    )
-
-                    if (initSuccess) {
-                        showResponseText("Models downloaded and initialized successfully!")
-                        Toast.makeText(this@MainActivity, "Models downloaded and initialized successfully", Toast.LENGTH_LONG).show()
-                    } else {
-                        showResponseText("Error initializing models")
-                        Toast.makeText(this@MainActivity, "Error initializing models", Toast.LENGTH_LONG).show()
-                    }
+                    showResponseText("Models downloaded and initialized successfully!")
+                    Toast.makeText(this@MainActivity, "Models downloaded and initialized successfully", Toast.LENGTH_LONG).show()
                 } else {
                     showResponseText("Error downloading models: $errorMessage")
                     Toast.makeText(this@MainActivity, "Error downloading models: $errorMessage", Toast.LENGTH_LONG).show()
@@ -327,16 +308,47 @@ class MainActivity : AppCompatActivity() {
     }
 
     // Native method declarations
-    private external fun initializeSmolVLM(
-        visionModelPath: String,
-        embedModelPath: String,
-        decoderModelPath: String,
-        vocabPath: String,
-        tokenizerPath: String
-    ): Boolean
+    private external fun describeImage(imageBuffer: ByteBuffer, width: Int, height: Int, prompt: String): String
 
     private fun describeImage() {
-        downloadModels()
+        if (latestImageUri == null) {
+            showResponseText("No image selected")
+            return
+        }
+
+        // Get the image from the preview
+        val bitmap = binding.imagePreview.drawable?.toBitmap()
+        if (bitmap == null) {
+            showResponseText("Failed to get image data")
+            return
+        }
+
+        // Convert to ByteBuffer
+        val imageBuffer = bitmap.toByteBuffer()
+        
+        // Get image dimensions
+        val width = bitmap.width
+        val height = bitmap.height
+        
+        // Use the default prompt for now
+        val prompt = "Can you describe this image?"
+        
+        // Call the native method
+        val description = describeImage(imageBuffer, width, height, prompt)
+        
+        // Show the response
+        showResponseText(description)
+    }
+
+    // Helper extension function to convert Bitmap to ByteBuffer
+    private fun Bitmap.toByteBuffer(): ByteBuffer {
+        // Create a direct ByteBuffer
+        val buffer = ByteBuffer.allocateDirect(this.byteCount)
+        // Copy the pixels
+        this.copyPixelsToBuffer(buffer)
+        // Reset position to 0
+        buffer.rewind()
+        return buffer
     }
 
     private fun allPermissionsGranted() = REQUIRED_PERMISSIONS.all {

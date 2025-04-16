@@ -47,31 +47,60 @@ SmolVLM::SmolVLM(const std::string& vision_model_path,
                  const std::string& vocab_path,
                  const std::string& tokenizer_path)
     : env(ORT_LOGGING_LEVEL_WARNING, "SmolVLM"),
-      tokenizer(vocab_path, tokenizer_path),
-      vision_session(env, vision_model_path.c_str(), session_options),
-      embed_session(env, embed_model_path.c_str(), session_options),
-      decoder_session(env, decoder_model_path.c_str(), session_options) {
+      tokenizer(vocab_path, tokenizer_path) {
     
-    // Initialize session options
-    session_options.SetIntraOpNumThreads(1);
-    session_options.SetGraphOptimizationLevel(GraphOptimizationLevel::ORT_ENABLE_ALL);
+    LOGI("Starting SmolVLM initialization...");
     
-    // Get special token IDs from tokenizer
-    eos_token_id = tokenizer.getEosTokenId();
-    image_token_id = tokenizer.getImageTokenId();
-    
-    // Initialize model configuration
-    // TODO: Load these values from model config
-    num_key_value_heads = 32;
-    head_dim = 128;
-    num_hidden_layers = 32;
-    
-    LOGI("Initialized SmolVLM with configuration:");
-    LOGI("  - num_key_value_heads: %d", num_key_value_heads);
-    LOGI("  - head_dim: %d", head_dim);
-    LOGI("  - num_hidden_layers: %d", num_hidden_layers);
-    LOGI("  - eos_token_id: %d", eos_token_id);
-    LOGI("  - image_token_id: %d", image_token_id);
+    try {
+        // Initialize session options
+        LOGI("Setting up session options...");
+        session_options.SetIntraOpNumThreads(1);
+        session_options.SetGraphOptimizationLevel(GraphOptimizationLevel::ORT_ENABLE_ALL);
+        
+        // Initialize vision session
+        LOGI("Loading vision model from: %s", vision_model_path.c_str());
+        vision_session = std::make_unique<Ort::Session>(env, vision_model_path.c_str(), session_options);
+        LOGI("Vision model loaded successfully");
+        
+        // Initialize embed session
+        LOGI("Loading embed model from: %s", embed_model_path.c_str());
+        embed_session = std::make_unique<Ort::Session>(env, embed_model_path.c_str(), session_options);
+        LOGI("Embed model loaded successfully");
+        
+        // Initialize decoder session
+        LOGI("Loading decoder model from: %s", decoder_model_path.c_str());
+        decoder_session = std::make_unique<Ort::Session>(env, decoder_model_path.c_str(), session_options);
+        LOGI("Decoder model loaded successfully");
+        
+        // Get special token IDs from tokenizer
+        //LOGI("Getting token IDs from tokenizer...");
+        LOGI("hardcoding token IDs from Python implementation");
+        LOGI("PLEASE FIX THIS");
+        //eos_token_id = tokenizer.getEosTokenId();
+        //image_token_id = tokenizer.getImageTokenId();
+        eos_token_id = 2;
+        image_token_id = 49190;
+
+        // Initialize model configuration
+        LOGI("Setting model configuration...");
+        num_key_value_heads = 5;
+        head_dim = 64;
+        num_hidden_layers = 32;
+        
+        LOGI("SmolVLM initialization completed successfully");
+        LOGI("Configuration:");
+        LOGI("  - num_key_value_heads: %d", num_key_value_heads);
+        LOGI("  - head_dim: %d", head_dim);
+        LOGI("  - num_hidden_layers: %d", num_hidden_layers);
+        LOGI("  - eos_token_id: %d", eos_token_id);
+        LOGI("  - image_token_id: %d", image_token_id);
+    } catch (const Ort::Exception& e) {
+        LOGE("ONNX Runtime error during initialization: %s", e.what());
+        throw std::runtime_error("Failed to initialize ONNX Runtime sessions: " + std::string(e.what()));
+    } catch (const std::exception& e) {
+        LOGE("Error during initialization: %s", e.what());
+        throw;
+    }
 }
 
 std::string SmolVLM::generateText(const std::string& prompt, const cv::Mat& image, int max_new_tokens) {
@@ -79,7 +108,18 @@ std::string SmolVLM::generateText(const std::string& prompt, const cv::Mat& imag
     
     // 1. Process inputs
     bool has_image = !image.empty();
-    std::vector<int> input_ids = tokenizer.applyTemplate(prompt, has_image);
+    
+    // Create the chat template
+    std::string chat_template = R"({
+        "role": "user",
+        "content": [
+            {"type": "image"},
+            {"type": "text", "text": ")" + prompt + R"("}
+        ]
+    })";
+    
+    // Tokenize the chat template
+    std::vector<int> input_ids = tokenizer.applyTemplate(chat_template, has_image);
     LOGI("Tokenized input: %zu tokens", input_ids.size());
 
     // Prepare batch dimension
@@ -99,16 +139,39 @@ std::string SmolVLM::generateText(const std::string& prompt, const cv::Mat& imag
     if (has_image) {
         LOGI("Processing image with dimensions: %dx%d", image.cols, image.rows);
         
+        // Ensure image is 512x512
+        const int target_size = 512;
+        cv::Mat resized_image;
+        if (image.cols != target_size || image.rows != target_size) {
+            cv::resize(image, resized_image, cv::Size(target_size, target_size), 0, 0, cv::INTER_AREA);
+            LOGI("Resized image to %dx%d", resized_image.cols, resized_image.rows);
+        } else {
+            resized_image = image;
+        }
+        
         // Preprocess image
-        std::vector<float> pixel_values = ImageProcessor::preprocess(image, 224, 224);
-        std::vector<uint8_t> pixel_attention_mask(1, 1);
+        std::vector<float> pixel_values = ImageProcessor::preprocess(resized_image, target_size, target_size);
+        
+        // Create attention mask array with enough values for the full tensor
+        const size_t attention_mask_size = 1 * 1 * target_size * target_size;  // batch_size * sequence_length * height * width
+        std::vector<uint8_t> pixel_attention_mask(attention_mask_size, 1);  // Use uint8_t instead of bool
 
         // Create input tensors for vision encoder
+        // Add batch dimension to match expected shape [batch_size, channels, height, width]
         auto pixel_values_tensor = createTensor<float>(
-                pixel_values, {1, 3, 224, 224});
+                pixel_values, {1, 1, 3, target_size, target_size});  // [batch_size, sequence_length, channels, height, width]
 
-        auto pixel_attention_mask_tensor = createTensor<uint8_t>(
-                pixel_attention_mask, {1, 1});
+        // Create shape array for attention mask [batch_size, sequence_length, height, width]
+        const int64_t attention_mask_shape[] = {1, 1, target_size, target_size};
+
+        // Create a bool tensor from uint8_t data
+        auto pixel_attention_mask_tensor = Ort::Value::CreateTensor<bool>(
+            Ort::MemoryInfo::CreateCpu(OrtArenaAllocator, OrtMemTypeDefault),
+            reinterpret_cast<bool*>(pixel_attention_mask.data()),
+            attention_mask_size,
+            attention_mask_shape,
+            4  // rank
+        );
 
         // Define input and output names
         const char* vision_input_names[] = {"pixel_values", "pixel_attention_mask"};
@@ -119,7 +182,7 @@ std::string SmolVLM::generateText(const std::string& prompt, const cv::Mat& imag
         vision_inputs.push_back(std::move(pixel_values_tensor));
         vision_inputs.push_back(std::move(pixel_attention_mask_tensor));
 
-        auto vision_outputs = vision_session.Run(
+        auto vision_outputs = vision_session->Run(
                 Ort::RunOptions{nullptr},
                 vision_input_names, vision_inputs.data(), vision_inputs.size(),
                 vision_output_names, 1);
@@ -159,7 +222,7 @@ std::string SmolVLM::generateText(const std::string& prompt, const cv::Mat& imag
         std::vector<Ort::Value> embed_inputs;
         embed_inputs.push_back(std::move(input_tensor_value));
 
-        auto embed_outputs = embed_session.Run(
+        auto embed_outputs = embed_session->Run(
                 Ort::RunOptions{nullptr},
                 embed_input_names, embed_inputs.data(), embed_inputs.size(),
                 embed_output_names, 1);
@@ -237,7 +300,7 @@ std::string SmolVLM::generateText(const std::string& prompt, const cv::Mat& imag
             output_names_c.push_back(name.c_str());
         }
 
-        auto decoder_outputs = decoder_session.Run(
+        auto decoder_outputs = decoder_session->Run(
                 Ort::RunOptions{nullptr},
                 decoder_input_names_c.data(), decoder_inputs.data(), decoder_inputs.size(),
                 output_names_c.data(), output_names.size());
@@ -251,6 +314,7 @@ std::string SmolVLM::generateText(const std::string& prompt, const cv::Mat& imag
         int next_token = 0;
         float max_logit = -std::numeric_limits<float>::infinity();
 
+        LOGI("Processing logits for next token, vocab_size=%d", vocab_size);
         for (int v = 0; v < vocab_size; v++) {
             float logit = logits_data[(logits_shape[1] - 1) * vocab_size + v];
             if (logit > max_logit) {
@@ -258,6 +322,14 @@ std::string SmolVLM::generateText(const std::string& prompt, const cv::Mat& imag
                 next_token = v;
             }
         }
+
+        // Validate the token ID
+        if (next_token < 0 || next_token >= vocab_size) {
+            LOGE("Invalid token ID generated: %d (vocab_size=%d)", next_token, vocab_size);
+            next_token = eos_token_id;  // Force end of generation
+        }
+
+        LOGI("Generated token %d: id=%d, logit=%.4f", i, next_token, max_logit);
 
         // Store updated past key values
         for (size_t j = 1; j < decoder_outputs.size(); j++) {
@@ -276,10 +348,6 @@ std::string SmolVLM::generateText(const std::string& prompt, const cv::Mat& imag
 
         // Add to generated tokens
         generated_tokens.push_back(next_token);
-        
-        // Log the generated token
-        std::string token_text = tokenizer.decode({next_token});
-        LOGV("Generated token %d: %s (id: %d)", i, token_text.c_str(), next_token);
 
         // Check for EOS token
         if (next_token == eos_token_id) {

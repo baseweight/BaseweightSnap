@@ -30,9 +30,9 @@ private:
             const std::string& tokenizer_path);
 
     // ONNX Runtime session pointers
-    Ort::Session vision_session;
-    Ort::Session embed_session;
-    Ort::Session decoder_session;
+    std::unique_ptr<Ort::Session> vision_session;
+    std::unique_ptr<Ort::Session> embed_session;
+    std::unique_ptr<Ort::Session> decoder_session;
 
     // Tokenizer instance
     SmolVLMTokenizer tokenizer;

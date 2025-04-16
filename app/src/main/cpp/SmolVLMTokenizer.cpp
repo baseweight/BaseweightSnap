@@ -249,20 +249,18 @@ std::vector<int> SmolVLMTokenizer::applyTemplate(const std::string& text, bool h
     // Add BOS token
     token_ids.push_back(bos_token_id);
     
-    // Add image token if present
+    // If there's an image, add the image token
     if (has_image) {
         token_ids.push_back(image_token_id);
     }
     
-    // Add text tokens
+    // Add the text tokens
     std::vector<int> text_tokens = encode(text);
     token_ids.insert(token_ids.end(), text_tokens.begin(), text_tokens.end());
     
     // Add EOS token
     token_ids.push_back(eos_token_id);
     
-    LOGI("Applied template: %zu tokens total (text: %zu, special: %d)", 
-         token_ids.size(), text_tokens.size(), has_image ? 3 : 2);
     return token_ids;
 }
 
