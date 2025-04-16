@@ -48,12 +48,13 @@ SmolVLM::SmolVLM(const std::string& vision_model_path,
     session_options.SetGraphOptimizationLevel(GraphOptimizationLevel::ORT_ENABLE_ALL);
     
     // Initialize model configuration
-    // TODO: Load these values from model config
-    num_key_value_heads = 32;
-    head_dim = 128;
+    // Taken from the model config that came from here
+    // https://huggingface.co/HuggingFaceTB/SmolVLM2-500M-Video-Instruct/discussions/14
+    num_key_value_heads = 5;
+    head_dim = 64;
     num_hidden_layers = 32;
     eos_token_id = 2;
-    image_token_id = 1;
+    image_token_id = 49190;
 }
 
 std::string SmolVLM::generateText(const std::string& prompt, const cv::Mat& image, int max_new_tokens = 1024) {
