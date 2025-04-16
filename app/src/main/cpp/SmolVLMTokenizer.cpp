@@ -4,9 +4,19 @@
 
 #include "SmolVLMTokenizer.h"
 #include <android/log.h>
+#include <rapidjson/document.h>
+#include <rapidjson/istreamwrapper.h>
+#include <fstream>
+#include <sstream>
+#include <algorithm>
+#include <regex>
+#include <unordered_set>
 
 #define LOG_TAG "SmolVLMTokenizer"
+#define LOGV(...) __android_log_print(ANDROID_LOG_VERBOSE, LOG_TAG, __VA_ARGS__)
+#define LOGD(...) __android_log_print(ANDROID_LOG_DEBUG, LOG_TAG, __VA_ARGS__)
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, LOG_TAG, __VA_ARGS__)
+#define LOGW(...) __android_log_print(ANDROID_LOG_WARN, LOG_TAG, __VA_ARGS__)
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, __VA_ARGS__)
 
 #include <onnxruntime_cxx_api.h>
@@ -14,110 +24,29 @@
 #include <string>
 #include <unordered_map>
 #include <iostream>
-#include <fstream>
-#include <sstream>
-#include <algorithm>
 #include <cmath>
 #include <memory>
 
 
-// Helper to tokenize text
-std::vector<int> SmolVLMTokenizer::encode(const std::string& text) {
-    // NOTE: This is a placeholder. You'll need a proper tokenizer implementation.
-    // For now, we'll use a very naive approach that won't work properly
-    std::vector<int> tokens;
-    std::istringstream iss(text);
-    std::string word;
-
-    while (iss >> word) {
-        if (token_to_id.find(word) != token_to_id.end()) {
-            tokens.push_back(token_to_id[word]);
-        } else {
-            // Unknown token handling
-            tokens.push_back(0); // Unknown token ID
-        }
-    }
-
-    return tokens;
-}
-
-SmolVLMTokenizer::SmolVLMTokenizer(const std::string& vocab_path, const std::string& config_path) {
-    loadVocab(vocab_path);
-    loadConfig(config_path);
-}
-
-void SmolVLMTokenizer::loadVocab(const std::string& vocab_path) {
-    std::ifstream ifs(vocab_path);
-    if (!ifs.is_open()) {
-        LOGE("Failed to open vocabulary file: %s", vocab_path.c_str());
-        throw std::runtime_error("Failed to open vocabulary file");
-    }
-
-    rapidjson::IStreamWrapper isw(ifs);
-    rapidjson::Document doc;
-    doc.ParseStream(isw);
-
-    if (doc.HasParseError()) {
-        LOGE("Failed to parse vocabulary JSON");
-        throw std::runtime_error("Failed to parse vocabulary JSON");
-    }
-
-    // Load vocabulary
-    for (auto it = doc.MemberBegin(); it != doc.MemberEnd(); ++it) {
-        std::string token = it->name.GetString();
-        int id = it->value.GetInt();
-        vocab[token] = id;
-        inv_vocab[id] = token;
-    }
-
-    LOGI("Loaded vocabulary with %zu tokens", vocab.size());
-}
-
-void SmolVLMTokenizer::loadConfig(const std::string& config_path) {
-    std::ifstream ifs(config_path);
-    if (!ifs.is_open()) {
-        LOGE("Failed to open config file: %s", config_path.c_str());
-        throw std::runtime_error("Failed to open config file");
-    }
-
-    rapidjson::IStreamWrapper isw(ifs);
-    rapidjson::Document doc;
-    doc.ParseStream(isw);
-
-    if (doc.HasParseError()) {
-        LOGE("Failed to parse config JSON");
-        throw std::runtime_error("Failed to parse config JSON");
-    }
-
-    // Load special tokens
-    bos_token_id = doc["bos_token_id"].GetInt();
-    eos_token_id = doc["eos_token_id"].GetInt();
-    pad_token_id = doc["pad_token_id"].GetInt();
-    unk_token_id = doc["unk_token_id"].GetInt();
-    image_token_id = doc["image_token_id"].GetInt();
-
-    // Load BPE merges
-    const rapidjson::Value& merges_array = doc["merges"];
-    for (const auto& merge : merges_array.GetArray()) {
-        std::string first = merge[0].GetString();
-        std::string second = merge[1].GetString();
-        merges.emplace_back(first, second);
-    }
-
-    LOGI("Loaded tokenizer configuration");
-}
-
+// Helper function to clean text
 std::string SmolVLMTokenizer::cleanText(const std::string& text) {
     std::string cleaned = text;
-    // Remove control characters
-    cleaned.erase(std::remove_if(cleaned.begin(), cleaned.end(), 
-        [](unsigned char c) { return std::iscntrl(c); }), cleaned.end());
+    
+    // Replace control characters with space
+    std::replace_if(cleaned.begin(), cleaned.end(),
+        [](unsigned char c) { return std::iscntrl(c); }, ' ');
+    
     // Normalize whitespace
-    std::replace_if(cleaned.begin(), cleaned.end(), 
-        [](unsigned char c) { return std::isspace(c); }, ' ');
+    cleaned = std::regex_replace(cleaned, std::regex("\\s+"), " ");
+    
+    // Trim
+    cleaned = std::regex_replace(cleaned, std::regex("^\\s+|\\s+$"), "");
+    
+    LOGV("Cleaned text: '%s' -> '%s'", text.c_str(), cleaned.c_str());
     return cleaned;
 }
 
+// Helper function to split text into words
 std::vector<std::string> SmolVLMTokenizer::whitespaceTokenize(const std::string& text) {
     std::vector<std::string> tokens;
     std::istringstream iss(text);
@@ -125,66 +54,195 @@ std::vector<std::string> SmolVLMTokenizer::whitespaceTokenize(const std::string&
     while (iss >> token) {
         tokens.push_back(token);
     }
+    LOGV("Tokenized into %zu words", tokens.size());
     return tokens;
 }
 
-std::vector<std::string> SmolVLMTokenizer::bpe(const std::string& token) {
-    std::vector<std::string> word;
-    for (char c : token) {
-        word.push_back(std::string(1, c));
+// Helper function to split word into characters
+std::vector<std::string> SmolVLMTokenizer::splitIntoChars(const std::string& word) {
+    std::vector<std::string> chars;
+    for (char c : word) {
+        chars.push_back(std::string(1, c));
     }
+    LOGV("Split word '%s' into %zu characters", word.c_str(), chars.size());
+    return chars;
+}
 
-    for (const auto& merge : merges) {
+// Helper function to get BPE pairs
+std::vector<std::pair<std::string, std::string>> SmolVLMTokenizer::getPairs(const std::vector<std::string>& word) {
+    std::vector<std::pair<std::string, std::string>> pairs;
+    if (word.size() < 2) return pairs;
+    
+    for (size_t i = 0; i < word.size() - 1; i++) {
+        pairs.emplace_back(word[i], word[i + 1]);
+    }
+    LOGV("Found %zu BPE pairs", pairs.size());
+    return pairs;
+}
+
+// BPE encoding for a single word
+std::vector<std::string> SmolVLMTokenizer::bpe(const std::string& word) {
+    if (word.empty()) return {};
+    
+    std::vector<std::string> word_chars = splitIntoChars(word);
+    if (word_chars.size() == 1) return word_chars;
+    
+    int merge_count = 0;
+    while (true) {
+        auto pairs = getPairs(word_chars);
+        if (pairs.empty()) break;
+        
+        // Find the highest priority merge
+        std::pair<std::string, std::string> best_pair;
+        int best_priority = -1;
+        
+        for (const auto& pair : pairs) {
+            std::string merged = pair.first + pair.second;
+            auto it = bpe_ranks.find(merged);
+            if (it != bpe_ranks.end() && it->second > best_priority) {
+                best_pair = pair;
+                best_priority = it->second;
+            }
+        }
+        
+        if (best_priority == -1) break;
+        
+        // Merge the best pair
         std::vector<std::string> new_word;
         size_t i = 0;
-        while (i < word.size()) {
-            if (i < word.size() - 1 && word[i] == merge.first && word[i + 1] == merge.second) {
-                new_word.push_back(word[i] + word[i + 1]);
+        while (i < word_chars.size()) {
+            if (i < word_chars.size() - 1 && 
+                word_chars[i] == best_pair.first && 
+                word_chars[i + 1] == best_pair.second) {
+                new_word.push_back(best_pair.first + best_pair.second);
                 i += 2;
+                merge_count++;
             } else {
-                new_word.push_back(word[i]);
+                new_word.push_back(word_chars[i]);
                 i += 1;
             }
         }
-        word = new_word;
+        word_chars = new_word;
     }
-
-    return word;
+    
+    LOGV("BPE encoded '%s' with %d merges into %zu tokens", 
+         word.c_str(), merge_count, word_chars.size());
+    return word_chars;
 }
 
+// Main encoding function
 std::vector<int> SmolVLMTokenizer::encode(const std::string& text) {
     std::vector<int> token_ids;
+    
+    // Clean and normalize text
     std::string cleaned_text = cleanText(text);
-    std::vector<std::string> tokens = whitespaceTokenize(cleaned_text);
-
-    for (const auto& token : tokens) {
-        std::vector<std::string> bpe_tokens = bpe(token);
-        for (const auto& bpe_token : bpe_tokens) {
-            auto it = vocab.find(bpe_token);
-            if (it != vocab.end()) {
+    
+    // Split into words
+    auto words = whitespaceTokenize(cleaned_text);
+    
+    // Process each word
+    for (const auto& word : words) {
+        // Apply BPE
+        auto bpe_tokens = bpe(word);
+        
+        // Convert to token IDs
+        for (const auto& token : bpe_tokens) {
+            auto it = token_to_id.find(token);
+            if (it != token_to_id.end()) {
                 token_ids.push_back(it->second);
             } else {
+                // Handle unknown tokens
+                LOGW("Unknown token: '%s'", token.c_str());
                 token_ids.push_back(unk_token_id);
             }
         }
     }
-
+    
+    LOGI("Encoded text into %zu tokens", token_ids.size());
     return token_ids;
 }
 
-std::string SmolVLMTokenizer::decode(const std::vector<int>& token_ids) {
-    std::string text;
-    for (size_t i = 0; i < token_ids.size(); ++i) {
-        auto it = inv_vocab.find(token_ids[i]);
-        if (it != inv_vocab.end()) {
-            text += it->second;
-        } else {
-            text += "<unk>";
-        }
-    }
-    return text;
+// Constructor implementation
+SmolVLMTokenizer::SmolVLMTokenizer(const std::string& vocab_path, const std::string& config_path) {
+    loadVocab(vocab_path);
+    loadConfig(config_path);
 }
 
+// Load vocabulary from JSON
+void SmolVLMTokenizer::loadVocab(const std::string& vocab_path) {
+    std::ifstream ifs(vocab_path);
+    if (!ifs.is_open()) {
+        LOGE("Failed to open vocab file: %s", vocab_path.c_str());
+        return;
+    }
+    
+    rapidjson::IStreamWrapper isw(ifs);
+    rapidjson::Document doc;
+    doc.ParseStream(isw);
+    
+    if (doc.HasParseError()) {
+        LOGE("Failed to parse vocab JSON: %s", 
+             rapidjson::GetParseError_En(doc.GetParseError()));
+        return;
+    }
+    
+    // Load token to ID mapping
+    for (auto it = doc.MemberBegin(); it != doc.MemberEnd(); ++it) {
+        std::string token = it->name.GetString();
+        int id = it->value.GetInt();
+        token_to_id[token] = id;
+        id_to_token[id] = token;
+    }
+    
+    LOGI("Loaded vocabulary with %zu tokens", token_to_id.size());
+}
+
+// Load tokenizer configuration from JSON
+void SmolVLMTokenizer::loadConfig(const std::string& config_path) {
+    std::ifstream ifs(config_path);
+    if (!ifs.is_open()) {
+        LOGE("Failed to open config file: %s", config_path.c_str());
+        return;
+    }
+    
+    rapidjson::IStreamWrapper isw(ifs);
+    rapidjson::Document doc;
+    doc.ParseStream(isw);
+    
+    if (doc.HasParseError()) {
+        LOGE("Failed to parse config JSON: %s", 
+             rapidjson::GetParseError_En(doc.GetParseError()));
+        return;
+    }
+    
+    // Load special tokens
+    if (doc.HasMember("special_tokens")) {
+        const auto& special_tokens = doc["special_tokens"];
+        bos_token_id = special_tokens["bos_token_id"].GetInt();
+        eos_token_id = special_tokens["eos_token_id"].GetInt();
+        unk_token_id = special_tokens["unk_token_id"].GetInt();
+        image_token_id = special_tokens["image_token_id"].GetInt();
+        LOGI("Loaded special tokens: BOS=%d, EOS=%d, UNK=%d, IMAGE=%d", 
+             bos_token_id, eos_token_id, unk_token_id, image_token_id);
+    } else {
+        LOGE("Missing special_tokens in config");
+    }
+    
+    // Load BPE merge rules
+    if (doc.HasMember("merges")) {
+        const auto& merges = doc["merges"];
+        int priority = 0;
+        for (const auto& merge : merges.GetArray()) {
+            std::string pair = merge.GetString();
+            bpe_ranks[pair] = priority++;
+        }
+        LOGI("Loaded %zu BPE merge rules", bpe_ranks.size());
+    } else {
+        LOGE("Missing merges in config");
+    }
+}
+
+// Apply template for text with optional image
 std::vector<int> SmolVLMTokenizer::applyTemplate(const std::string& text, bool has_image) {
     std::vector<int> token_ids;
     
@@ -203,6 +261,30 @@ std::vector<int> SmolVLMTokenizer::applyTemplate(const std::string& text, bool h
     // Add EOS token
     token_ids.push_back(eos_token_id);
     
+    LOGI("Applied template: %zu tokens total (text: %zu, special: %d)", 
+         token_ids.size(), text_tokens.size(), has_image ? 3 : 2);
     return token_ids;
+}
+
+// Decode tokens back to text
+std::string SmolVLMTokenizer::decode(const std::vector<int>& token_ids) {
+    std::string text;
+    for (size_t i = 0; i < token_ids.size(); i++) {
+        int token_id = token_ids[i];
+        
+        // Skip special tokens
+        if (token_id == bos_token_id || token_id == eos_token_id || 
+            token_id == image_token_id || token_id == unk_token_id) {
+            continue;
+        }
+        
+        auto it = id_to_token.find(token_id);
+        if (it != id_to_token.end()) {
+            text += it->second;
+        }
+    }
+    
+    LOGI("Decoded %zu tokens to text: '%s'", token_ids.size(), text.c_str());
+    return text;
 }
 

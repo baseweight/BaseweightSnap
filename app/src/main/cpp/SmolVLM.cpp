@@ -4,6 +4,7 @@
 
 #include "SmolVLM.h"
 #include "ImageProcessor.h"
+#include <android/log.h>
 #include <onnxruntime_cxx_api.h>
 #include <opencv2/opencv.hpp>
 #include <vector>
@@ -15,6 +16,13 @@
 #include <algorithm>
 #include <cmath>
 #include <memory>
+
+#define LOG_TAG "SmolVLM"
+#define LOGV(...) __android_log_print(ANDROID_LOG_VERBOSE, LOG_TAG, __VA_ARGS__)
+#define LOGD(...) __android_log_print(ANDROID_LOG_DEBUG, LOG_TAG, __VA_ARGS__)
+#define LOGI(...) __android_log_print(ANDROID_LOG_INFO, LOG_TAG, __VA_ARGS__)
+#define LOGW(...) __android_log_print(ANDROID_LOG_WARN, LOG_TAG, __VA_ARGS__)
+#define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, __VA_ARGS__)
 
 // Initialize the static instance pointer
 std::unique_ptr<SmolVLM> SmolVLM::instance = nullptr;
@@ -57,12 +65,22 @@ SmolVLM::SmolVLM(const std::string& vision_model_path,
     num_key_value_heads = 32;
     head_dim = 128;
     num_hidden_layers = 32;
+    
+    LOGI("Initialized SmolVLM with configuration:");
+    LOGI("  - num_key_value_heads: %d", num_key_value_heads);
+    LOGI("  - head_dim: %d", head_dim);
+    LOGI("  - num_hidden_layers: %d", num_hidden_layers);
+    LOGI("  - eos_token_id: %d", eos_token_id);
+    LOGI("  - image_token_id: %d", image_token_id);
 }
 
-std::string SmolVLM::generateText(const std::string& prompt, const cv::Mat& image, int max_new_tokens = 1024) {
+std::string SmolVLM::generateText(const std::string& prompt, const cv::Mat& image, int max_new_tokens) {
+    LOGI("Generating text for prompt: '%s'", prompt.c_str());
+    
     // 1. Process inputs
     bool has_image = !image.empty();
     std::vector<int> input_ids = tokenizer.applyTemplate(prompt, has_image);
+    LOGI("Tokenized input: %zu tokens", input_ids.size());
 
     // Prepare batch dimension
     const int batch_size = 1;
@@ -79,13 +97,15 @@ std::string SmolVLM::generateText(const std::string& prompt, const cv::Mat& imag
     // 3. Process image if present
     std::vector<float> image_features;
     if (has_image) {
+        LOGI("Processing image with dimensions: %dx%d", image.cols, image.rows);
+        
         // Preprocess image
         std::vector<float> pixel_values = ImageProcessor::preprocess(image, 224, 224);
-        std::vector<uint8_t> pixel_attention_mask(1, 1);  // Using uint8_t instead of bool
+        std::vector<uint8_t> pixel_attention_mask(1, 1);
 
         // Create input tensors for vision encoder
         auto pixel_values_tensor = createTensor<float>(
-                pixel_values, {1, 3, 224, 224}); // Assuming 224x224 image size
+                pixel_values, {1, 3, 224, 224});
 
         auto pixel_attention_mask_tensor = createTensor<uint8_t>(
                 pixel_attention_mask, {1, 1});
@@ -108,6 +128,8 @@ std::string SmolVLM::generateText(const std::string& prompt, const cv::Mat& imag
         float* features_data = vision_outputs[0].GetTensorMutableData<float>();
         size_t features_size = vision_outputs[0].GetTensorTypeAndShapeInfo().GetElementCount();
         image_features.assign(features_data, features_data + features_size);
+        
+        LOGI("Extracted image features: %zu dimensions", features_size);
     }
 
     // 4. Initialize past key values
@@ -115,12 +137,13 @@ std::string SmolVLM::generateText(const std::string& prompt, const cv::Mat& imag
     for (int layer = 0; layer < num_hidden_layers; layer++) {
         for (const char* kv : {"key", "value"}) {
             std::string name = "past_key_values." + std::to_string(layer) + "." + kv;
-            past_key_values[name] = std::vector<float>(); // Empty tensor with shape [batch_size, num_key_value_heads, 0, head_dim]
+            past_key_values[name] = std::vector<float>();
         }
     }
 
     // 5. Generation loop
     std::vector<int> generated_tokens;
+    LOGI("Starting generation with max_new_tokens=%d", max_new_tokens);
 
     for (int i = 0; i < max_new_tokens; i++) {
         // Create input tensor for token embeddings
@@ -151,8 +174,7 @@ std::string SmolVLM::generateText(const std::string& prompt, const cv::Mat& imag
         if (!image_features.empty()) {
             for (size_t j = 0; j < input_ids.size(); j++) {
                 if (input_ids[j] == image_token_id) {
-                    // Replace embedding with image features
-                    size_t embed_dim = embeds_shape[2]; // Get embedding dimension
+                    size_t embed_dim = embeds_shape[2];
                     for (size_t k = 0; k < embed_dim; k++) {
                         inputs_embeds[j * embed_dim + k] = image_features[k];
                     }
@@ -188,7 +210,6 @@ std::string SmolVLM::generateText(const std::string& prompt, const cv::Mat& imag
                 if (past_key_values[name].empty()) {
                     kv_shape = {batch_size, num_key_value_heads, 0, head_dim};
                 } else {
-                    // Determine shape based on stored values
                     int seq_len = past_key_values[name].size() / (batch_size * num_key_value_heads * head_dim);
                     kv_shape = {batch_size, num_key_value_heads, seq_len, head_dim};
                 }
@@ -241,7 +262,7 @@ std::string SmolVLM::generateText(const std::string& prompt, const cv::Mat& imag
         // Store updated past key values
         for (size_t j = 1; j < decoder_outputs.size(); j++) {
             std::string key = output_names[j];
-            key.replace(0, 8, "past_key_values"); // Replace "present." with "past_key_values."
+            key.replace(0, 8, "past_key_values");
 
             float* kv_data = decoder_outputs[j].GetTensorMutableData<float>();
             size_t kv_size = decoder_outputs[j].GetTensorTypeAndShapeInfo().GetElementCount();
@@ -255,16 +276,19 @@ std::string SmolVLM::generateText(const std::string& prompt, const cv::Mat& imag
 
         // Add to generated tokens
         generated_tokens.push_back(next_token);
+        
+        // Log the generated token
+        std::string token_text = tokenizer.decode({next_token});
+        LOGV("Generated token %d: %s (id: %d)", i, token_text.c_str(), next_token);
 
         // Check for EOS token
         if (next_token == eos_token_id) {
+            LOGI("Generated EOS token, stopping generation");
             break;
         }
-
-        // Optional: Print progress
-        std::cout << tokenizer.decode({next_token}) << std::flush;
     }
 
-    std::cout << std::endl;
-    return tokenizer.decode(generated_tokens);
+    std::string result = tokenizer.decode(generated_tokens);
+    LOGI("Generated text: '%s'", result.c_str());
+    return result;
 }
