@@ -7,6 +7,9 @@ import android.net.Uri
 import android.os.Bundle
 import android.view.View
 import android.view.WindowManager
+import android.view.inputmethod.EditorInfo
+import android.view.inputmethod.InputMethodManager
+import android.widget.TextView.OnEditorActionListener
 import androidx.appcompat.app.AppCompatActivity
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.ImageCapture
@@ -16,6 +19,9 @@ import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import ai.baseweight.baseweightsnap.databinding.ActivityMainBinding
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Locale
@@ -29,6 +35,8 @@ class MainActivity : AppCompatActivity() {
     private var isPreviewMode = false
     private var latestImageUri: Uri? = null
     private var currentCameraSelector = CameraSelector.DEFAULT_BACK_CAMERA
+    private lateinit var modelDownloader: ModelDownloader
+    private val scope = CoroutineScope(Dispatchers.Main)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -49,6 +57,9 @@ class MainActivity : AppCompatActivity() {
         binding = ActivityMainBinding.inflate(layoutInflater)
         setContentView(binding.root)
 
+        // Initialize model downloader
+        modelDownloader = ModelDownloader(this)
+
         // Setup button click listeners
         binding.btnCapture.setOnClickListener { captureImage() }
         binding.btnSwitchCamera.setOnClickListener { switchCamera() }
@@ -56,6 +67,19 @@ class MainActivity : AppCompatActivity() {
         binding.btnClosePreview.setOnClickListener { closePreview() }
         binding.btnAddText.setOnClickListener { showTextInput() }
         binding.btnDescribe.setOnClickListener { describeImage() }
+        binding.btnCancelInput.setOnClickListener { hideTextInput() }
+        binding.btnSubmitInput.setOnClickListener { submitTextInput() }
+        binding.btnDismissResponse.setOnClickListener { hideResponseText() }
+
+        // Setup text input
+        binding.promptInput.setOnEditorActionListener { _, actionId, _ ->
+            if (actionId == EditorInfo.IME_ACTION_DONE) {
+                submitTextInput()
+                true
+            } else {
+                false
+            }
+        }
 
         // Request camera permissions
         if (allPermissionsGranted()) {
@@ -179,6 +203,17 @@ class MainActivity : AppCompatActivity() {
         }, ContextCompat.getMainExecutor(this))
     }
 
+    private fun showResponseText(text: String) {
+        binding.responseText.text = text
+        binding.responseText.visibility = View.VISIBLE
+        binding.btnDismissResponse.visibility = View.VISIBLE
+    }
+
+    private fun hideResponseText() {
+        binding.responseText.visibility = View.GONE
+        binding.btnDismissResponse.visibility = View.GONE
+    }
+
     private fun showPreviewMode(show: Boolean) {
         isPreviewMode = show
         binding.cameraPreview.visibility = if (show) View.GONE else View.VISIBLE
@@ -193,11 +228,17 @@ class MainActivity : AppCompatActivity() {
         binding.btnClosePreview.visibility = if (show) View.VISIBLE else View.GONE
         binding.btnAddText.visibility = if (show) View.VISIBLE else View.GONE
         binding.btnDescribe.visibility = if (show) View.VISIBLE else View.GONE
+
+        // Hide text input and response when switching modes
+        binding.promptInputLayout.visibility = View.GONE
+        hideResponseText()
     }
 
     private fun closePreview() {
         showPreviewMode(false)
         binding.imagePreview.setImageURI(null)
+        binding.promptInputLayout.visibility = View.GONE
+        hideResponseText()
     }
 
     private fun openGallery() {
@@ -207,11 +248,61 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun showTextInput() {
-        // TODO: Implement text input dialog
+        // Hide bottom buttons
+        binding.btnAddText.visibility = View.GONE
+        binding.btnDescribe.visibility = View.GONE
+        binding.btnClosePreview.visibility = View.GONE
+        
+        // Show text input
+        binding.promptInputLayout.visibility = View.VISIBLE
+        binding.promptInput.requestFocus()
+        
+        // Show keyboard
+        val imm = getSystemService(INPUT_METHOD_SERVICE) as InputMethodManager
+        imm.showSoftInput(binding.promptInput, InputMethodManager.SHOW_IMPLICIT)
+    }
+
+    private fun hideTextInput() {
+        // Show bottom buttons
+        binding.btnAddText.visibility = View.VISIBLE
+        binding.btnDescribe.visibility = View.VISIBLE
+        binding.btnClosePreview.visibility = View.VISIBLE
+        
+        // Hide text input
+        binding.promptInputLayout.visibility = View.GONE
+        
+        // Hide keyboard
+        val imm = getSystemService(INPUT_METHOD_SERVICE) as InputMethodManager
+        imm.hideSoftInputFromWindow(binding.promptInput.windowToken, 0)
+    }
+
+    private fun submitTextInput() {
+        val prompt = binding.promptInput.text?.toString() ?: ""
+        if (prompt.isNotEmpty()) {
+            // Show the response text
+            showResponseText("Prompt: $prompt")
+            
+            // Clear and hide the input
+            binding.promptInput.text?.clear()
+            hideTextInput()
+        }
+    }
+
+    private fun downloadModels() {
+        scope.launch {
+            showResponseText("Downloading models...")
+            modelDownloader.downloadModels { success, errorMessage ->
+                if (success) {
+                    showResponseText("Models downloaded successfully!")
+                } else {
+                    showResponseText("Error downloading models: $errorMessage")
+                }
+            }
+        }
     }
 
     private fun describeImage() {
-        // TODO: Implement image description using ML model
+        downloadModels()
     }
 
     private fun allPermissionsGranted() = REQUIRED_PERMISSIONS.all {
