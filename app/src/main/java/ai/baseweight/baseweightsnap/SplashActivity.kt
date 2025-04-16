@@ -3,7 +3,7 @@ package ai.baseweight.baseweightsnap
 import android.content.Intent
 import android.os.Bundle
 import android.view.WindowManager
-import android.widget.TextView
+import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
 import ai.baseweight.baseweightsnap.databinding.ActivitySplashBinding
 import kotlinx.coroutines.CoroutineScope
@@ -38,6 +38,8 @@ class SplashActivity : AppCompatActivity() {
             
             modelDownloader.downloadModels { success, errorMessage ->
                 if (success) {
+                    Toast.makeText(this@SplashActivity, "Models downloaded successfully", Toast.LENGTH_LONG).show()
+                    
                     // Calculate remaining time to reach 1 second
                     val elapsedTime = System.currentTimeMillis() - startTime
                     val remainingTime = maxOf(0, 1000 - elapsedTime)
@@ -49,6 +51,7 @@ class SplashActivity : AppCompatActivity() {
                     }
                 } else {
                     binding.splashStatus.text = "Error: $errorMessage"
+                    Toast.makeText(this@SplashActivity, "Error downloading models: $errorMessage", Toast.LENGTH_LONG).show()
                     // TODO: Add retry button or error handling
                 }
             }

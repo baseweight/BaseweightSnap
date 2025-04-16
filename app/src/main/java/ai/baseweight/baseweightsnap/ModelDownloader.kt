@@ -8,6 +8,7 @@ import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.Response
+import org.json.JSONObject
 import java.io.File
 import java.io.FileOutputStream
 import java.io.IOException
@@ -47,6 +48,77 @@ class ModelDownloader(private val context: Context) {
         return modelsDir
     }
 
+    private fun getDownloadUrl(modelId: String): String? {
+        val url = "$baseUrl/api/models/$modelId/download"
+        Log.d(TAG, "Requesting download URL from: $url")
+        
+        val request = Request.Builder()
+            .url(url)
+            .addHeader("Authorization", "Bearer $apiKey")
+            .build()
+
+        return try {
+            val response = client.newCall(request).execute()
+            if (!response.isSuccessful) {
+                Log.e(TAG, "Failed to get download URL: ${response.code}")
+                return null
+            }
+
+            val body = response.body?.string()
+            if (body == null) {
+                Log.e(TAG, "Empty response body when getting download URL")
+                return null
+            }
+
+            val json = JSONObject(body)
+            val downloadUrl = json.getString("download_url")
+            Log.d(TAG, "Got download URL: $downloadUrl")
+            downloadUrl
+        } catch (e: Exception) {
+            Log.e(TAG, "Error getting download URL", e)
+            null
+        }
+    }
+
+    private fun downloadFromUrl(url: String, modelFile: File): Boolean {
+        Log.d(TAG, "Downloading from S3 URL: $url")
+        
+        val request = Request.Builder()
+            .url(url)
+            .build()
+
+        try {
+            val response = client.newCall(request).execute()
+            if (!response.isSuccessful) {
+                Log.e(TAG, "Failed to download from S3: ${response.code}")
+                return false
+            }
+
+            val body = response.body
+            if (body == null) {
+                Log.e(TAG, "Empty response body from S3")
+                return false
+            }
+
+            Log.d(TAG, "Content length: ${body.contentLength()} bytes")
+            Log.d(TAG, "Content type: ${body.contentType()}")
+
+            FileOutputStream(modelFile).use { output ->
+                body.byteStream().use { input ->
+                    val bytesCopied = input.copyTo(output)
+                    Log.d(TAG, "Copied $bytesCopied bytes to ${modelFile.absolutePath}")
+                }
+            }
+
+            Log.d(TAG, "Successfully downloaded to ${modelFile.absolutePath}")
+            Log.d(TAG, "Final file size: ${modelFile.length()} bytes")
+            return true
+        } catch (e: IOException) {
+            Log.e(TAG, "Error downloading from S3", e)
+            return false
+        }
+    }
+
     suspend fun downloadModels(callback: (Boolean, String?) -> Unit) {
         withContext(Dispatchers.Main) {
             callback(true, null) // Start callback
@@ -68,51 +140,16 @@ class ModelDownloader(private val context: Context) {
                     continue
                 }
 
-                try {
-                    val url = "$baseUrl/api/models/${model.id}"
-                    Log.d(TAG, "Attempting to download from URL: $url")
-                    
-                    val request = Request.Builder()
-                        .url(url)
-                        .addHeader("Authorization", "Bearer $apiKey")
-                        .build()
-
-                    Log.d(TAG, "Making request for ${model.filename}")
-                    val response = client.newCall(request).execute()
-                    Log.d(TAG, "Response code: ${response.code}")
-                    Log.d(TAG, "Response message: ${response.message}")
-                    
-                    if (!response.isSuccessful) {
-                        success = false
-                        errorMessage = "Failed to download ${model.filename}: ${response.code}"
-                        Log.e(TAG, "Download failed: $errorMessage")
-                        continue
-                    }
-
-                    val body = response.body
-                    if (body == null) {
-                        success = false
-                        errorMessage = "Empty response body for ${model.filename}"
-                        Log.e(TAG, "Empty response body")
-                        continue
-                    }
-
-                    Log.d(TAG, "Content length: ${body.contentLength()} bytes")
-                    Log.d(TAG, "Content type: ${body.contentType()}")
-
-                    FileOutputStream(modelFile).use { output ->
-                        body.byteStream().use { input ->
-                            val bytesCopied = input.copyTo(output)
-                            Log.d(TAG, "Copied $bytesCopied bytes to ${modelFile.absolutePath}")
-                        }
-                    }
-
-                    Log.d(TAG, "Successfully downloaded ${model.filename} to ${modelFile.absolutePath}")
-                    Log.d(TAG, "Final file size: ${modelFile.length()} bytes")
-                } catch (e: IOException) {
+                val downloadUrl = getDownloadUrl(model.id)
+                if (downloadUrl == null) {
                     success = false
-                    errorMessage = "Error downloading ${model.filename}: ${e.message}"
-                    Log.e(TAG, "Download error", e)
+                    errorMessage = "Failed to get download URL for ${model.filename}"
+                    continue
+                }
+
+                if (!downloadFromUrl(downloadUrl, modelFile)) {
+                    success = false
+                    errorMessage = "Failed to download ${model.filename} from S3"
                     continue
                 }
             }
