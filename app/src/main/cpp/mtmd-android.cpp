@@ -1,0 +1,324 @@
+/**
+ * @file mtmd-android.cpp
+ * @brief Main file for the MTMD Android application
+ * 
+ * This file contains the JNI methods for loading and processing models,
+ * as well as the initialization and cleanup of the MTMD context.
+ */
+
+#include <android/log.h>
+#include <jni.h>
+#include <iomanip>
+#include <math.h>
+#include <string>
+#include <unistd.h>
+#include "llama.h"
+#include "common.h"
+#include "mtmd.h"
+#include "clip.h"
+#include "model_manager.h"
+
+#define TAG "mtmd-android.cpp"
+#define LOGi(...) __android_log_print(ANDROID_LOG_INFO, TAG, __VA_ARGS__)
+#define LOGe(...) __android_log_print(ANDROID_LOG_ERROR, TAG, __VA_ARGS__)
+
+jclass la_int_var;
+jmethodID la_int_var_value;
+jmethodID la_int_var_inc;
+
+std::string cached_token_chars;
+
+static std::unique_ptr<ModelManager> g_manager;
+static std::atomic<bool> g_should_stop{false};
+
+bool is_valid_utf8(const char * string) {
+    if (!string) {
+        return true;
+    }
+
+    const unsigned char * bytes = (const unsigned char *)string;
+    int num;
+
+    while (*bytes != 0x00) {
+        if ((*bytes & 0x80) == 0x00) {
+            // U+0000 to U+007F
+            num = 1;
+        } else if ((*bytes & 0xE0) == 0xC0) {
+            // U+0080 to U+07FF
+            num = 2;
+        } else if ((*bytes & 0xF0) == 0xE0) {
+            // U+0800 to U+FFFF
+            num = 3;
+        } else if ((*bytes & 0xF8) == 0xF0) {
+            // U+10000 to U+10FFFF
+            num = 4;
+        } else {
+            return false;
+        }
+
+        bytes += 1;
+        for (int i = 1; i < num; ++i) {
+            if ((*bytes & 0xC0) != 0x80) {
+                return false;
+            }
+            bytes += 1;
+        }
+    }
+
+    return true;
+}
+
+static void log_callback(ggml_log_level level, const char * fmt, void * data) {
+    if (level == GGML_LOG_LEVEL_ERROR)     __android_log_print(ANDROID_LOG_ERROR, TAG, fmt, data);
+    else if (level == GGML_LOG_LEVEL_INFO) __android_log_print(ANDROID_LOG_INFO, TAG, fmt, data);
+    else if (level == GGML_LOG_LEVEL_WARN) __android_log_print(ANDROID_LOG_WARN, TAG, fmt, data);
+    else __android_log_print(ANDROID_LOG_DEFAULT, TAG, fmt, data);
+}
+
+extern "C"
+JNIEXPORT jboolean JNICALL
+Java_ai_baseweight_baseweightsnap_MTMD_1Android_load_1models(
+        JNIEnv *env,
+        jobject,
+        jstring language_model_path,
+        jstring mmproj_path) {
+    
+    if (g_manager) {
+        env->ThrowNew(env->FindClass("java/lang/IllegalStateException"), "Models already loaded");
+        return JNI_FALSE;
+    }
+
+    const char *lang_model_path = env->GetStringUTFChars(language_model_path, 0);
+    const char *mmproj_model_path = env->GetStringUTFChars(mmproj_path, 0);
+    
+    g_manager = std::make_unique<ModelManager>();
+    
+    bool success = g_manager->loadLanguageModel(lang_model_path) &&
+                  g_manager->loadVisionModel(mmproj_model_path) &&
+                  g_manager->initializeContext() &&
+                  g_manager->initializeBatch() &&
+                  g_manager->initializeSampler();
+
+    env->ReleaseStringUTFChars(language_model_path, lang_model_path);
+    env->ReleaseStringUTFChars(mmproj_path, mmproj_model_path);
+
+    if (!success) {
+        g_manager.reset();
+        env->ThrowNew(env->FindClass("java/lang/IllegalStateException"), "Failed to initialize models");
+        return JNI_FALSE;
+    }
+
+    return JNI_TRUE;
+}
+
+extern "C"
+JNIEXPORT void JNICALL
+Java_ai_baseweight_baseweightsnap_MTMD_1Android_free_1models(
+        JNIEnv *,
+        jobject) {
+    g_manager.reset();
+}
+
+extern "C"
+JNIEXPORT jboolean JNICALL
+Java_ai_baseweight_baseweightsnap_MTMD_1Android_process_1image(
+        JNIEnv *env,
+        jobject,
+        jstring image_path) {
+
+    if (!g_manager) {
+        LOGe("process_image(): manager cannot be null");
+        env->ThrowNew(env->FindClass("java/lang/IllegalArgumentException"), "Manager cannot be null");
+        return JNI_FALSE;
+    }
+
+    auto ctx_vision = g_manager->getVisionContext();
+    if (!ctx_vision) {
+        LOGe("process_image(): vision context cannot be null");
+        env->ThrowNew(env->FindClass("java/lang/IllegalArgumentException"), "Vision context cannot be null");
+        return JNI_FALSE;
+    }
+
+    auto path_to_image = env->GetStringUTFChars(image_path, 0);
+    LOGi("Processing image from %s", path_to_image);
+
+    mtmd::bitmap bmp(mtmd_helper_bitmap_init_from_file(path_to_image));
+    env->ReleaseStringUTFChars(image_path, path_to_image);
+
+    if (!bmp.ptr) {
+        LOGe("Failed to load image");
+        return JNI_FALSE;
+    }
+
+    // Store the bitmap in the manager
+    g_manager->addBitmap(std::move(bmp));
+
+    return JNI_TRUE;
+}
+
+extern "C"
+JNIEXPORT void JNICALL
+Java_ai_baseweight_baseweightsnap_MTMD_1Android_backend_1init(JNIEnv *, jobject) {
+    llama_backend_init();
+}
+
+extern "C"
+JNIEXPORT void JNICALL
+Java_ai_baseweight_baseweightsnap_MTMD_1Android_backend_1free(JNIEnv *, jobject) {
+    llama_backend_free();
+}
+
+extern "C"
+JNIEXPORT void JNICALL
+Java_ai_baseweight_baseweightsnap_MTMD_1Android_log_1to_1android(JNIEnv *, jobject) {
+    llama_log_set(log_callback, NULL);
+}
+
+extern "C"
+JNIEXPORT jstring JNICALL
+Java_ai_baseweight_baseweightsnap_MTMD_1Android_system_1info(JNIEnv *env, jobject) {
+    return env->NewStringUTF(llama_print_system_info());
+}
+
+extern "C"
+JNIEXPORT jstring JNICALL
+Java_ai_baseweight_baseweightsnap_MTMD_1Android_generate_1response(
+        JNIEnv *env,
+        jobject,
+        jstring prompt,
+        jint max_tokens) {
+
+    if (!g_manager) {
+        LOGe("generate_response(): manager cannot be null");
+        env->ThrowNew(env->FindClass("java/lang/IllegalArgumentException"), "Manager cannot be null");
+        return nullptr;
+    }
+
+    const char* prompt_str = env->GetStringUTFChars(prompt, 0);
+    
+    // Create input text
+    mtmd_input_text text;
+    text.text = prompt_str;
+    text.add_special = true;
+    text.parse_special = true;
+
+    // Tokenize the input
+    mtmd::input_chunks chunks(mtmd_input_chunks_init());
+    auto bitmaps_c_ptr = g_manager->getBitmaps().c_ptr();
+    int32_t res = mtmd_tokenize(g_manager->getVisionContext(),
+                               chunks.ptr.get(),
+                               &text,
+                               bitmaps_c_ptr.data(),
+                               bitmaps_c_ptr.size());
+
+    env->ReleaseStringUTFChars(prompt, prompt_str);
+
+    if (res != 0) {
+        LOGe("Unable to tokenize prompt, res = %d", res);
+        env->ThrowNew(env->FindClass("java/lang/IllegalStateException"), "Failed to tokenize prompt");
+        return nullptr;
+    }
+
+    // Evaluate the tokens
+    llama_pos new_n_past;
+    if (mtmd_helper_eval_chunks(g_manager->getVisionContext(),
+                               g_manager->getLanguageContext(),
+                               chunks.ptr.get(),
+                               g_manager->getNPast(),
+                               0,
+                               g_manager->getNBatch(),
+                               true,
+                               &new_n_past)) {
+        LOGe("Unable to eval prompt");
+        env->ThrowNew(env->FindClass("java/lang/IllegalStateException"), "Failed to evaluate prompt");
+        return nullptr;
+    }
+
+    g_manager->setNPast(new_n_past);
+
+    // Generate response
+    std::string response;
+    for (int i = 0; i < max_tokens; i++) {
+        if (g_should_stop) {
+            g_should_stop = false;  // Reset for next time
+            break;
+        }
+        
+        llama_token token_id = common_sampler_sample(g_manager->getSampler(), g_manager->getLanguageContext(), -1);
+        common_sampler_accept(g_manager->getSampler(), token_id, true);
+
+        if (llama_vocab_is_eog(g_manager->getVocab(), token_id)) {
+            break;
+        }
+
+        response += common_token_to_piece(g_manager->getLanguageContext(), token_id);
+
+        // Evaluate the token
+        common_batch_clear(g_manager->getBatch());
+        common_batch_add(g_manager->getBatch(), token_id, g_manager->getNPast()++, {0}, true);
+        if (llama_decode(g_manager->getLanguageContext(), g_manager->getBatch())) {
+            LOGe("failed to decode token");
+            env->ThrowNew(env->FindClass("java/lang/IllegalStateException"), "Failed to decode token");
+            return nullptr;
+        }
+    }
+
+    return env->NewStringUTF(response.c_str());
+}
+
+extern "C"
+JNIEXPORT jint JNICALL
+Java_ai_baseweight_baseweightsnap_MTMD_1Android_get_1token_1count(
+        JNIEnv *env,
+        jobject,
+        jstring text) {
+
+    if (!g_manager) {
+        LOGe("get_token_count(): manager cannot be null");
+        env->ThrowNew(env->FindClass("java/lang/IllegalArgumentException"), "Manager cannot be null");
+        return -1;
+    }
+
+    const char* text_str = env->GetStringUTFChars(text, 0);
+    
+    // Create input text
+    mtmd_input_text input_text;
+    input_text.text = text_str;
+    input_text.add_special = false;
+    input_text.parse_special = true;
+
+    // Tokenize the input
+    mtmd::input_chunks chunks(mtmd_input_chunks_init());
+    int32_t res = mtmd_tokenize(g_manager->getVisionContext(),
+                               chunks.ptr.get(),
+                               &input_text,
+                               nullptr,
+                               0);
+
+    env->ReleaseStringUTFChars(text, text_str);
+
+    if (res != 0) {
+        LOGe("Unable to tokenize text, res = %d", res);
+        env->ThrowNew(env->FindClass("java/lang/IllegalStateException"), "Failed to tokenize text");
+        return -1;
+    }
+
+    return chunks.ptr->n_tokens;
+}
+
+extern "C"
+JNIEXPORT void JNICALL
+Java_ai_baseweight_baseweightsnap_MTMD_1Android_stop_1generation(
+        JNIEnv *,
+        jobject) {
+    g_should_stop = true;
+}
+
+extern "C"
+JNIEXPORT void JNICALL
+Java_ai_baseweight_baseweightsnap_MTMD_1Android_reset_1stop_1flag(
+        JNIEnv *,
+        jobject) {
+    g_should_stop = false;
+}
+

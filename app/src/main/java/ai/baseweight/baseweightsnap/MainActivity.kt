@@ -42,6 +42,8 @@ class MainActivity : AppCompatActivity() {
     private lateinit var modelDownloader: ModelDownloader
     private val scope = CoroutineScope(Dispatchers.Main)
 
+    private val vlmRunner: MTMD_Android = MTMD_Android.instance()
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         
@@ -58,6 +60,12 @@ class MainActivity : AppCompatActivity() {
             or View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
         )
         
+        vlmRunner.load_models(
+            "/data/local/tmp/gguf/smolvlm-2.2B-instruct.gguf",
+            "/data/local/tmp/gguf/mmproj-smolvlm-2.2B-instruct.gguf",
+        )
+
+
         binding = ActivityMainBinding.inflate(layoutInflater)
         setContentView(binding.root)
 
@@ -307,10 +315,7 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    // Native method declarations
-    private external fun describeImage(imageBuffer: ByteBuffer, width: Int, height: Int, prompt: String): String
-
-    private fun describeImage() {
+    private suspend fun describeImage() {
         if (latestImageUri == null) {
             showResponseText("No image selected")
             return
@@ -323,21 +328,19 @@ class MainActivity : AppCompatActivity() {
             return
         }
 
-        // Convert to ByteBuffer
-        val imageBuffer = bitmap.toByteBuffer()
-        
-        // Get image dimensions
-        val width = bitmap.width
-        val height = bitmap.height
-        
+        vlmRunner.processImage(bitmap)
+
         // Use the default prompt for now
         val prompt = "Can you describe this image?"
-        
-        // Call the native method
-        val description = describeImage(imageBuffer, width, height, prompt)
-        
-        // Show the response
-        showResponseText(description)
+
+        // Call the GGML_Runner describeImage method
+        vlmRunner.generateResponse(prompt, 2048).collect(
+            {
+                description ->
+                showResponseText(description)
+            }
+        )
+
     }
 
     // Helper extension function to convert Bitmap to ByteBuffer
