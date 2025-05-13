@@ -39,8 +39,8 @@ class SplashActivity : AppCompatActivity() {
             try {
                 // Load models
                 val success = vlmRunner.loadModels(
-                    "/data/local/tmp/gguf/smolvlm-2.2B-instruct.gguf",
-                    "/data/local/tmp/gguf/mmproj-smolvlm-2.2B-instruct.gguf"
+                    "/data/local/tmp/gguf/smolvlm2-500M-vid-instruct.gguf",
+                    "/data/local/tmp/gguf/mmproj-smolvlm2-500M-vid-instruct.gguf"
                 )
                 
                 if (success) {

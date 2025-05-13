@@ -18,6 +18,8 @@ if(${CMAKE_ANDROID_ARCH_ABI} STREQUAL "arm64-v8a")
 endif()
 
 set(LLAMA_CURL OFF)
+#set(GGML_OPENCL ON)
+set(GGML_VULKAN ON)
 
 #load local llama.cpp
 add_subdirectory(llama.cpp build-llama)
