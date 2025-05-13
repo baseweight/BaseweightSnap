@@ -81,21 +81,14 @@ class MTMD_Android {
         try {
             val response = generate_response(prompt, maxTokens)
             emit(response)
+        } catch (e: Exception) {
+            Log.e(tag, "Exception in generateResponse", e)
+            emit("Error: ${e.message}")
         } finally {
             // Ensure we reset the flag even if generation is interrupted
             reset_stop_flag()
         }
     }.flowOn(runLoop)
-
-    suspend fun getTokenCount(text: String): Int {
-        return withContext(runLoop) {
-            get_token_count(text)
-        }
-    }
-
-    fun stopGeneration() {
-        stop_generation()
-    }
 
     companion object {
         // Enforce only one instance of MTMD_Android

@@ -28,6 +28,28 @@ jmethodID la_int_var_inc;
 
 std::string cached_token_chars;
 
+JavaVM* g_jvm;
+JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM* vm, void* reserved) {
+
+    // Initialize GGML and common
+    ggml_time_init();
+    common_init();
+    
+    // Initialize your ModelManager here
+    ModelManager::getInstance();  // This ensures the singleton is created
+    
+    // You can also initialize any JNI-related things here
+    JNIEnv* env;
+    if (vm->GetEnv((void**)&env, JNI_VERSION_1_6) != JNI_OK) {
+        return JNI_ERR;
+    }
+    
+    // Store the JavaVM pointer for later use if needed
+    g_jvm = vm;
+    
+    return JNI_VERSION_1_6;
+}
+
 static std::atomic<bool> g_should_stop{false};
 
 bool is_valid_utf8(const char * string) {
@@ -197,78 +219,16 @@ Java_ai_baseweight_baseweightsnap_MTMD_1Android_generate_1response(
         return nullptr;
     }
 
-    const char* prompt_str = env->GetStringUTFChars(prompt, 0);
-    
-    // Create input text
-    mtmd_input_text text;
-    text.text = prompt_str;
-    text.add_special = true;
-    text.parse_special = true;
-
-    // Tokenize the input
-    mtmd::input_chunks chunks(mtmd_input_chunks_init());
-    auto& bitmaps = manager.getBitmaps();  // Use non-const reference since c_ptr() isn't const
-    auto bitmaps_c_ptr = bitmaps.c_ptr();
-    int32_t res = mtmd_tokenize(manager.getVisionContext(),
-                               chunks.ptr.get(),
-                               &text,
-                               bitmaps_c_ptr.data(),
-                               bitmaps_c_ptr.size());
-
+    const char* prompt_str = env->GetStringUTFChars(prompt, 0);        
+   
+    // Generate response
+    std::string response = manager.generateResponse(prompt_str, max_tokens);
     env->ReleaseStringUTFChars(prompt, prompt_str);
 
-    if (res != 0) {
-        LOGe("Unable to tokenize prompt, res = %d", res);
-        env->ThrowNew(env->FindClass("java/lang/IllegalStateException"), "Failed to tokenize prompt");
+    if (response.empty()) {
+        LOGe("Failed to generate response");
+        env->ThrowNew(env->FindClass("java/lang/IllegalStateException"), "Failed to generate response");
         return nullptr;
-    }
-
-    // Evaluate the tokens
-    llama_pos new_n_past;
-    if (mtmd_helper_eval_chunks(manager.getVisionContext(),
-                               manager.getLanguageContext(),
-                               chunks.ptr.get(),
-                               manager.getNPast(),
-                               0,
-                               manager.getNBatch(),
-                               true,
-                               &new_n_past)) {
-        LOGe("Unable to eval prompt");
-        env->ThrowNew(env->FindClass("java/lang/IllegalStateException"), "Failed to evaluate prompt");
-        return nullptr;
-    }
-
-    manager.setNPast(new_n_past);
-
-    // Generate response
-    std::string response;
-    for (int i = 0; i < max_tokens; i++) {
-        if (g_should_stop) {
-            g_should_stop = false;  // Reset for next time
-            break;
-        }
-        
-        llama_token token_id = common_sampler_sample(manager.getSampler(), manager.getLanguageContext(), -1);
-        common_sampler_accept(manager.getSampler(), token_id, true);
-
-        if (llama_vocab_is_eog(manager.getVocab(), token_id)) {
-            break;
-        }
-
-        response += common_token_to_piece(manager.getLanguageContext(), token_id);
-
-        // Evaluate the token
-        llama_batch& batch = manager.getBatch();
-        common_batch_clear(batch);
-        llama_pos n_past = manager.getNPast();
-        common_batch_add(batch, token_id, n_past, {0}, true);
-        manager.setNPast(n_past + 1);
-        
-        if (llama_decode(manager.getLanguageContext(), batch)) {
-            LOGe("failed to decode token");
-            env->ThrowNew(env->FindClass("java/lang/IllegalStateException"), "Failed to decode token");
-            return nullptr;
-        }
     }
 
     return env->NewStringUTF(response.c_str());
