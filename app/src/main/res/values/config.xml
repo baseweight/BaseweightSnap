@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="api_key">Z3zh9E4l_quBpjLJ55Hv-YFIXPFCXHwK0a9bT1MQHzg</string>
+    <string name="api_base_url">https://stage-api.baseweight.ai</string>
+    
+    <!-- Model IDs -->
+    <string name="model_id_decoder">fae86e9d-3e74-433c-b1b5-2fca0f3f8cb8</string>
+    <string name="model_id_embed">d9b5a162-0c33-4209-94db-8e201707e38d</string>
+    <string name="model_id_vision">668823fa-3aaa-4811-ab92-7dd8b235a93e</string>
+</resources> 

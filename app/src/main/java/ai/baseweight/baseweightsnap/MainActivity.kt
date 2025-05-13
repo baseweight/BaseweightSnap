@@ -22,9 +22,11 @@ import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import androidx.core.graphics.drawable.toBitmap
 import ai.baseweight.baseweightsnap.databinding.ActivityMainBinding
+import android.util.Log
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.io.File
 import java.nio.ByteBuffer
 import java.text.SimpleDateFormat
@@ -39,8 +41,9 @@ class MainActivity : AppCompatActivity() {
     private var isPreviewMode = false
     private var latestImageUri: Uri? = null
     private var currentCameraSelector = CameraSelector.DEFAULT_BACK_CAMERA
-    private lateinit var modelDownloader: ModelDownloader
     private val scope = CoroutineScope(Dispatchers.Main)
+
+    private val vlmRunner: MTMD_Android = MTMD_Android.instance()
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -61,16 +64,13 @@ class MainActivity : AppCompatActivity() {
         binding = ActivityMainBinding.inflate(layoutInflater)
         setContentView(binding.root)
 
-        // Initialize model downloader
-        modelDownloader = ModelDownloader(this)
-
         // Setup button click listeners
         binding.btnCapture.setOnClickListener { captureImage() }
         binding.btnSwitchCamera.setOnClickListener { switchCamera() }
         binding.btnGallery.setOnClickListener { openGallery() }
         binding.btnClosePreview.setOnClickListener { closePreview() }
         binding.btnAddText.setOnClickListener { showTextInput() }
-        binding.btnDescribe.setOnClickListener { describeImage() }
+        binding.btnDescribe.setOnClickListener { describeImageWrapper() }
         binding.btnCancelInput.setOnClickListener { hideTextInput() }
         binding.btnSubmitInput.setOnClickListener { submitTextInput() }
         binding.btnDismissResponse.setOnClickListener { hideResponseText() }
@@ -292,25 +292,13 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun downloadModels() {
+    private fun describeImageWrapper() {
         scope.launch {
-            showResponseText("Downloading models...")
-            modelDownloader.downloadModels { success, errorMessage ->
-                if (success) {
-                    showResponseText("Models downloaded and initialized successfully!")
-                    Toast.makeText(this@MainActivity, "Models downloaded and initialized successfully", Toast.LENGTH_LONG).show()
-                } else {
-                    showResponseText("Error downloading models: $errorMessage")
-                    Toast.makeText(this@MainActivity, "Error downloading models: $errorMessage", Toast.LENGTH_LONG).show()
-                }
-            }
+            describeImage()
         }
     }
 
-    // Native method declarations
-    private external fun describeImage(imageBuffer: ByteBuffer, width: Int, height: Int, prompt: String): String
-
-    private fun describeImage() {
+    private suspend fun describeImage() {
         if (latestImageUri == null) {
             showResponseText("No image selected")
             return
@@ -323,21 +311,38 @@ class MainActivity : AppCompatActivity() {
             return
         }
 
-        // Convert to ByteBuffer
-        val imageBuffer = bitmap.toByteBuffer()
-        
-        // Get image dimensions
-        val width = bitmap.width
-        val height = bitmap.height
-        
+        vlmRunner.processImage(bitmap)
+
         // Use the default prompt for now
         val prompt = "Can you describe this image?"
-        
-        // Call the native method
-        val description = describeImage(imageBuffer, width, height, prompt)
-        
-        // Show the response
-        showResponseText(description)
+
+        showResponseText("Generating description...")
+
+        val textView = binding.responseText
+        textView.visibility = View.VISIBLE  // Ensure it's visible
+
+        try {
+            Log.d("MainActivity", "Generating response for prompt: $prompt")
+            scope.launch {
+                vlmRunner.generateResponse(prompt, 2048).collect { text ->
+                    Log.d("MainActivity", "Received text: $text")
+                    withContext(Dispatchers.Main) {
+                        Log.d("MainActivity", "Generated text: $text")
+                        if(textView.text == "Generating description...") {
+                            textView.text = text
+                        } else {
+                            textView.append(text)
+                        }
+                        // Force layout update
+                        textView.invalidate()
+                    }
+                }
+            }
+        }
+        catch (e: Exception) {
+            Log.e("MainActivity", "Error generating response", e)
+            showResponseText("Error generating response: ${e.message}")
+        }
     }
 
     // Helper extension function to convert Bitmap to ByteBuffer

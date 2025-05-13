@@ -3,8 +3,6 @@ plugins {
     alias(libs.plugins.kotlin.android)
 }
 
-apply(from = "extract-ort.gradle.kts")
-
 android {
     namespace = "ai.baseweight.baseweightsnap"
     compileSdk = 35
