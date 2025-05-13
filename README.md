@@ -1,24 +1,21 @@
 # BaseWeightSnap
 
-BaseWeight Snap is an Android application that matches the HuggingFace Snap application.  The goal of this application
-is to demonstrate how to pull down models and the encryption keys from Baseweight Park such that the models can be decrypted
-and run on an Android device.
+BaseWeight Snap is an Android application that atttempts to recreate the functionality of the the HuggingFace Snap application. 
+The goal of this application is to show that it's possible to run Multimodal models on Android using llama.cpp and libmtmd.
 
 ## Features
 
 - Real-time object detection and weight estimation using ONNX Runtime
 - Camera integration using CameraX
 - Native C++ processing for optimal performance
-- Support for arm64-v8a and x86_64 architectures
+- Support for arm64-v8a 
 
 ## Technical Details
 
 ### Dependencies
 
-- ONNX Runtime Mobile v1.21.0 for ML model inference
-- OpenCV for image processing
 - CameraX v1.3.2 for camera functionality
-- RapidJSON for data handling
+- llama.cpp with libmtmd for VLM functionality
 
 ### Build Requirements
 
@@ -33,17 +30,14 @@ and run on an Android device.
 - `app/src/main/cpp/` - Native C++ code
 - `app/src/main/java/` - Kotlin/Java source code
 - External dependencies:
-  - OpenCV Android SDK
-  - RapidJSON
-  - ONNX Runtime
+- llama.cpp - symlinked into the `app/src/main/cpp` directory
 
 ## Building the Project
 
 1. Clone the repository
-2. Place the OpenCV Android SDK in the `external/OpenCV-android-sdk` directory
-3. Place RapidJSON in the `external/rapidjson` directory
-4. Sync the project with Gradle files
-5. Build and run the application
+2. Symlink the llama.cpp repository in `app/src/main/cpp`
+3. Sync the project with Gradle files
+4. Build and run the application.
 
 ## License
 
@@ -58,23 +52,3 @@ distributed under the License is distributed on an "AS IS" BASIS,
 WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
-
-## Contributing
-
-We welcome contributions to BaseWeightSnap! Here's how you can help:
-
-1. Fork the repository
-2. Create a feature branch (`git checkout -b feature/amazing-feature`)
-3. Make your changes
-4. Run tests and ensure code quality
-5. Commit your changes (`git commit -m 'Add amazing feature'`)
-6. Push to your branch (`git push origin feature/amazing-feature`)
-7. Open a Pull Request
-
-Please ensure your PR:
-- Follows the existing code style
-- Includes appropriate tests
-- Updates documentation as needed
-- Describes the changes made
-
-For major changes, please open an issue first to discuss what you would like to change.
