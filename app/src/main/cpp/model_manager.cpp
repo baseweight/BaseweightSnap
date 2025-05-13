@@ -1,9 +1,14 @@
 #include "model_manager.h"
 #include <android/log.h>
+#include <jni.h>
 
 #define TAG "model_manager.cpp"
 #define LOGi(...) __android_log_print(ANDROID_LOG_INFO, TAG, __VA_ARGS__)
 #define LOGe(...) __android_log_print(ANDROID_LOG_ERROR, TAG, __VA_ARGS__)
+
+static jmethodID method_onTextGenerated = nullptr;
+static jmethodID method_onGenerationComplete = nullptr;
+static jmethodID method_onGenerationError = nullptr;
 
 ModelManager::~ModelManager() {
     cleanup();
@@ -29,6 +34,39 @@ void ModelManager::cleanup() {
     vocab = nullptr;
     n_past = 0;
     bitmaps.entries.clear();
+}
+
+void ModelManager::onTextGenerated(const std::string& text, JNIEnv* env, jobject callback) {
+    if (!method_onTextGenerated) {
+        jclass callbackClass = env->GetObjectClass(callback);
+        method_onTextGenerated = env->GetMethodID(callbackClass, "onTextGenerated", "(Ljava/lang/String;)V");
+        env->DeleteLocalRef(callbackClass);
+    }
+    
+    jstring jtext = env->NewStringUTF(text.c_str());
+    env->CallVoidMethod(callback, method_onTextGenerated, jtext);
+    env->DeleteLocalRef(jtext);
+}
+
+void ModelManager::onGenerationComplete(JNIEnv* env, jobject callback) {
+    if (!method_onGenerationComplete) {
+        jclass callbackClass = env->GetObjectClass(callback);
+        method_onGenerationComplete = env->GetMethodID(callbackClass, "onGenerationComplete", "()V");
+        env->DeleteLocalRef(callbackClass);
+    }
+    env->CallVoidMethod(callback, method_onGenerationComplete);
+}
+
+void ModelManager::onGenerationError(const std::string& error, JNIEnv* env, jobject callback) {
+    if (!method_onGenerationError) {
+        jclass callbackClass = env->GetObjectClass(callback);
+        method_onGenerationError = env->GetMethodID(callbackClass, "onGenerationError", "(Ljava/lang/String;)V");
+        env->DeleteLocalRef(callbackClass);
+    }
+    
+    jstring jerror = env->NewStringUTF(error.c_str());
+    env->CallVoidMethod(callback, method_onGenerationError, jerror);
+    env->DeleteLocalRef(jerror);
 }
 
 bool ModelManager::loadLanguageModel(const char* model_path) {
@@ -105,12 +143,12 @@ void ModelManager::addBitmap(mtmd::bitmap&& bmp) {
     bitmaps.entries.push_back(std::move(bmp));
 }
 
-std::string ModelManager::generateResponse(const char* prompt, int max_tokens) {
+void ModelManager::generateResponseAsync(const char* prompt, int max_tokens, JNIEnv* env, jobject callback) {
     if (!evalMessage(prompt, true)) {  // Add BOS token for first message
-        return "Error: Failed to evaluate message";
+        onGenerationError("Failed to evaluate message", env, callback);
+        return;
     }
 
-    std::string response;
     llama_tokens generated_tokens;
     int n_predict = max_tokens;
 
@@ -120,21 +158,33 @@ std::string ModelManager::generateResponse(const char* prompt, int max_tokens) {
         common_sampler_accept(sampler, token_id, true);
 
         if (llama_vocab_is_eog(vocab, token_id) || checkAntiprompt(generated_tokens)) {
-            break;
+            onGenerationComplete(env, callback);
+            return;
         }
 
-        response += common_token_to_piece(lctx, token_id);
+        // Convert token to text
+        std::string token_text = common_token_to_piece(lctx, token_id);
+        if (!token_text.empty()) {
+            onTextGenerated(token_text, env, callback);
+        }
+
+        // Check if we've generated enough tokens
+        if (i >= n_predict - 1) {
+            onGenerationComplete(env, callback);
+            return;
+        }
+
 
         // Evaluate the token
         common_batch_clear(batch);
         common_batch_add(batch, token_id, n_past++, {0}, true);
         if (llama_decode(lctx, batch)) {
             LOGe("failed to decode token");
-            return "Error: Failed to decode token";
+            onGenerationError("Failed to decode token", env, callback);
+            return;
         }
     }
 
-    return response;
 }
 
 bool ModelManager::evalMessage(const char* prompt, bool add_bos) {

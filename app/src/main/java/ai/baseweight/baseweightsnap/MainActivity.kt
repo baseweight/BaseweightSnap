@@ -26,6 +26,7 @@ import android.util.Log
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.io.File
 import java.nio.ByteBuffer
 import java.text.SimpleDateFormat
@@ -315,13 +316,32 @@ class MainActivity : AppCompatActivity() {
         // Use the default prompt for now
         val prompt = "Can you describe this image?"
 
+        showResponseText("Generating description...")
+
+        val textView = binding.responseText
+        textView.visibility = View.VISIBLE  // Ensure it's visible
+
         try {
             Log.d("MainActivity", "Generating response for prompt: $prompt")
-            vlmRunner.generateResponse(prompt, 2048).collect { description ->
-                showResponseText(description)
+            scope.launch {
+                vlmRunner.generateResponse(prompt, 2048).collect { text ->
+                    Log.d("MainActivity", "Received text: $text")
+                    withContext(Dispatchers.Main) {
+                        Log.d("MainActivity", "Generated text: $text")
+                        if(textView.text == "Generating description...") {
+                            textView.text = text
+                        } else {
+                            textView.append(text)
+                        }
+                        // Force layout update
+                        textView.invalidate()
+                    }
+                }
             }
-        } catch (e: Exception) {
-            showResponseText("Error generating description: ${e.message}")
+        }
+        catch (e: Exception) {
+            Log.e("MainActivity", "Error generating response", e)
+            showResponseText("Error generating response: ${e.message}")
         }
     }
 

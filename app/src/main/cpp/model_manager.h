@@ -3,11 +3,17 @@
 #include <memory>
 #include <vector>
 #include <string>
+#include <jni.h>
 #include "llama.h"
 #include "mtmd.h"
+#include "chat.h"
 #include "common.h"
 #include "sampling.h"
-#include "chat.h"
+
+
+#define TAG "model_manager.h"
+#define LOGi(...) __android_log_print(ANDROID_LOG_INFO, TAG, __VA_ARGS__)
+#define LOGe(...) __android_log_print(ANDROID_LOG_ERROR, TAG, __VA_ARGS__)
 
 class ModelManager {
 public:
@@ -40,6 +46,7 @@ public:
 
     // Text generation
     std::string generateResponse(const char* prompt, int max_tokens);
+    void generateResponseAsync(const char* prompt, int max_tokens, JNIEnv* env, jobject callback);
     bool evalMessage(const char* prompt, bool add_bos = false);
 
     // Getters
@@ -59,6 +66,11 @@ private:
     // Private constructor for singleton
     ModelManager() = default;
     ~ModelManager();
+
+    // Callback methods
+    void onTextGenerated(const std::string& text, JNIEnv* env, jobject callback);
+    void onGenerationComplete(JNIEnv* env, jobject callback);
+    void onGenerationError(const std::string& error, JNIEnv* env, jobject callback);
 
     // Vision context
     mtmd_context* ctx_vision = nullptr;

@@ -199,39 +199,30 @@ Java_ai_baseweight_baseweightsnap_MTMD_1Android_system_1info(JNIEnv *env, jobjec
 }
 
 extern "C"
-JNIEXPORT jstring JNICALL
+JNIEXPORT void JNICALL
 Java_ai_baseweight_baseweightsnap_MTMD_1Android_generate_1response(
         JNIEnv *env,
         jobject,
         jstring prompt,
-        jint max_tokens) {
+        jint max_tokens,
+        jobject callback) {
 
     auto& manager = ModelManager::getInstance();
     if (!manager.areModelsLoaded()) {
         LOGe("generate_response(): models not loaded");
         env->ThrowNew(env->FindClass("java/lang/IllegalStateException"), "Models not loaded");
-        return nullptr;
+        return;
     }
 
     if (manager.getBitmaps().entries.empty()) {
         LOGe("generate_response(): no image processed");
         env->ThrowNew(env->FindClass("java/lang/IllegalStateException"), "No image processed");
-        return nullptr;
+        return;
     }
 
-    const char* prompt_str = env->GetStringUTFChars(prompt, 0);        
-   
-    // Generate response
-    std::string response = manager.generateResponse(prompt_str, max_tokens);
-    env->ReleaseStringUTFChars(prompt, prompt_str);
-
-    if (response.empty()) {
-        LOGe("Failed to generate response");
-        env->ThrowNew(env->FindClass("java/lang/IllegalStateException"), "Failed to generate response");
-        return nullptr;
-    }
-
-    return env->NewStringUTF(response.c_str());
+    const char* c_prompt = env->GetStringUTFChars(prompt, nullptr);
+    ModelManager::getInstance().generateResponseAsync(c_prompt, max_tokens, env, callback);
+    env->ReleaseStringUTFChars(prompt, c_prompt);
 }
 
 extern "C"

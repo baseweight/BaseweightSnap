@@ -4,9 +4,12 @@ import android.graphics.Bitmap
 import android.util.Log
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.asCoroutineDispatcher
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.channels.awaitClose
+import kotlinx.coroutines.channels.onFailure
+import kotlinx.coroutines.channels.trySendBlocking
 import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.flow
-import kotlinx.coroutines.flow.flowOn
+import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.io.FileOutputStream
@@ -46,7 +49,11 @@ class MTMD_Android {
     private external fun load_models(languageModelPath: String, mmprojPath: String): Boolean
     private external fun free_models()
     private external fun process_image(image_path: String): Boolean
-    private external fun generate_response(prompt: String, max_tokens: Int): String
+    private external fun generate_response(
+        prompt: String,
+        max_tokens: Int,
+        callback: TextGenerationCallback
+    ): String
     private external fun get_token_count(text: String): Int
     private external fun stop_generation()
     private external fun reset_stop_flag()
@@ -76,19 +83,43 @@ class MTMD_Android {
         }
     }
 
-    fun generateResponse(prompt: String, maxTokens: Int): Flow<String> = flow {
-        reset_stop_flag()  // Reset before starting
-        try {
-            val response = generate_response(prompt, maxTokens)
-            emit(response)
-        } catch (e: Exception) {
-            Log.e(tag, "Exception in generateResponse", e)
-            emit("Error: ${e.message}")
-        } finally {
-            // Ensure we reset the flag even if generation is interrupted
-            reset_stop_flag()
+    fun generateResponse(prompt: String, maxTokens: Int): Flow<String> = callbackFlow {
+        withContext(runLoop) {
+            reset_stop_flag()  // Reset before starting
+
+            val callback = object : TextGenerationCallback {
+                override fun onTextGenerated(text: String) {
+                    trySend(text).onFailure {
+                        exception: Throwable? ->
+                        Log.e(tag, "Failed to send text to flow", exception)
+                        stop_generation()
+                        close(exception)
+                    }
+                }
+
+                override fun onGenerationComplete() {
+                    close()
+                }
+
+                override fun onGenerationError(error: String) {
+                    cancel("Generation error: $error", null)
+                }
+            }
+
+            try {
+                generate_response(prompt, maxTokens, callback)
+            } catch (e: Exception) {
+                Log.e(tag, "Exception in generateResponse", e)
+                cancel("Error: ${e.message}", null)
+            } finally {
+                reset_stop_flag()
+            }
         }
-    }.flowOn(runLoop)
+
+        awaitClose {
+            stop_generation()
+        }
+    }
 
     companion object {
         // Enforce only one instance of MTMD_Android
