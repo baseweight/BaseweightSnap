@@ -3,18 +3,19 @@ package ai.baseweight.baseweightsnap
 import android.content.Intent
 import android.os.Bundle
 import android.view.WindowManager
-import android.widget.Toast
+import android.view.View
 import androidx.appcompat.app.AppCompatActivity
 import ai.baseweight.baseweightsnap.databinding.ActivitySplashBinding
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.withContext
 
 class SplashActivity : AppCompatActivity() {
     private lateinit var binding: ActivitySplashBinding
-    private lateinit var modelDownloader: ModelDownloader
     private val scope = CoroutineScope(Dispatchers.Main)
+    private val vlmRunner: MTMD_Android = MTMD_Android.instance()
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -28,32 +29,33 @@ class SplashActivity : AppCompatActivity() {
         binding = ActivitySplashBinding.inflate(layoutInflater)
         setContentView(binding.root)
 
-        modelDownloader = ModelDownloader(this)
-        downloadModels()
-    }
+        // Show loading indicator
+        binding.splashProgress.visibility = View.VISIBLE
+        binding.splashStatus.visibility = View.VISIBLE
+        binding.splashStatus.text = "Loading models..."
 
-    private fun downloadModels() {
+        // Launch main activity after loading models
         scope.launch {
-            val startTime = System.currentTimeMillis()
-            
-            modelDownloader.downloadModels { success, errorMessage ->
+            try {
+                // Load models
+                val success = vlmRunner.loadModels(
+                    "/data/local/tmp/gguf/smolvlm-2.2B-instruct.gguf",
+                    "/data/local/tmp/gguf/mmproj-smolvlm-2.2B-instruct.gguf"
+                )
+                
                 if (success) {
-                    Toast.makeText(this@SplashActivity, "Models downloaded successfully", Toast.LENGTH_LONG).show()
-                    
-                    // Calculate remaining time to reach 1 second
-                    val elapsedTime = System.currentTimeMillis() - startTime
-                    val remainingTime = maxOf(0, 1000 - elapsedTime)
-                    
-                    // Launch main activity after the remaining time
-                    scope.launch {
-                        delay(remainingTime)
-                        startMainActivity()
-                    }
+                    // Add a small delay to ensure smooth transition
+                    delay(500)
+                    startMainActivity()
                 } else {
-                    binding.splashStatus.text = "Error: $errorMessage"
-                    Toast.makeText(this@SplashActivity, "Error downloading models: $errorMessage", Toast.LENGTH_LONG).show()
-                    // TODO: Add retry button or error handling
+                    // Handle loading failure
+                    binding.splashStatus.text = "Failed to load models. Please try again."
+                    binding.splashProgress.visibility = View.GONE
                 }
+            } catch (e: Exception) {
+                // Handle any exceptions
+                binding.splashStatus.text = "Error: ${e.message}"
+                binding.splashProgress.visibility = View.GONE
             }
         }
     }

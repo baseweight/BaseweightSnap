@@ -28,7 +28,6 @@ jmethodID la_int_var_inc;
 
 std::string cached_token_chars;
 
-static std::unique_ptr<ModelManager> g_manager;
 static std::atomic<bool> g_should_stop{false};
 
 bool is_valid_utf8(const char * string) {
@@ -83,31 +82,28 @@ Java_ai_baseweight_baseweightsnap_MTMD_1Android_load_1models(
         jstring language_model_path,
         jstring mmproj_path) {
     
-    if (g_manager) {
-        env->ThrowNew(env->FindClass("java/lang/IllegalStateException"), "Models already loaded");
-        return JNI_FALSE;
-    }
-
+    auto& manager = ModelManager::getInstance();
+    
     const char *lang_model_path = env->GetStringUTFChars(language_model_path, 0);
     const char *mmproj_model_path = env->GetStringUTFChars(mmproj_path, 0);
     
-    g_manager = std::make_unique<ModelManager>();
-    
-    bool success = g_manager->loadLanguageModel(lang_model_path) &&
-                  g_manager->loadVisionModel(mmproj_model_path) &&
-                  g_manager->initializeContext() &&
-                  g_manager->initializeBatch() &&
-                  g_manager->initializeSampler();
+    bool success = manager.loadLanguageModel(lang_model_path) &&
+                  manager.loadVisionModel(mmproj_model_path) &&
+                  manager.initializeContext() &&
+                  manager.initializeBatch() &&
+                  manager.initializeSampler() &&
+                  manager.initializeChatTemplate("vicuna");  // Use vicuna template by default
 
     env->ReleaseStringUTFChars(language_model_path, lang_model_path);
     env->ReleaseStringUTFChars(mmproj_path, mmproj_model_path);
 
     if (!success) {
-        g_manager.reset();
+        LOGe("Failed to initialize models. Language model: %s, Vision model: %s", lang_model_path, mmproj_model_path);
         env->ThrowNew(env->FindClass("java/lang/IllegalStateException"), "Failed to initialize models");
         return JNI_FALSE;
     }
 
+    LOGi("Successfully initialized models");
     return JNI_TRUE;
 }
 
@@ -116,7 +112,7 @@ JNIEXPORT void JNICALL
 Java_ai_baseweight_baseweightsnap_MTMD_1Android_free_1models(
         JNIEnv *,
         jobject) {
-    g_manager.reset();
+    ModelManager::getInstance().cleanup();
 }
 
 extern "C"
@@ -126,32 +122,32 @@ Java_ai_baseweight_baseweightsnap_MTMD_1Android_process_1image(
         jobject,
         jstring image_path) {
 
-    if (!g_manager) {
-        LOGe("process_image(): manager cannot be null");
-        env->ThrowNew(env->FindClass("java/lang/IllegalArgumentException"), "Manager cannot be null");
-        return JNI_FALSE;
-    }
-
-    auto ctx_vision = g_manager->getVisionContext();
-    if (!ctx_vision) {
-        LOGe("process_image(): vision context cannot be null");
-        env->ThrowNew(env->FindClass("java/lang/IllegalArgumentException"), "Vision context cannot be null");
+    auto& manager = ModelManager::getInstance();
+    
+    // Check if models are loaded
+    if (!manager.areModelsLoaded()) {
+        LOGe("process_image(): models not loaded");
+        env->ThrowNew(env->FindClass("java/lang/IllegalStateException"), "Models not loaded");
         return JNI_FALSE;
     }
 
     auto path_to_image = env->GetStringUTFChars(image_path, 0);
     LOGi("Processing image from %s", path_to_image);
 
+    // Clear any existing bitmaps
+    manager.clearBitmaps();
+
     mtmd::bitmap bmp(mtmd_helper_bitmap_init_from_file(path_to_image));
     env->ReleaseStringUTFChars(image_path, path_to_image);
 
     if (!bmp.ptr) {
-        LOGe("Failed to load image");
+        LOGe("Failed to load image from %s", path_to_image);
         return JNI_FALSE;
     }
 
     // Store the bitmap in the manager
-    g_manager->addBitmap(std::move(bmp));
+    manager.addBitmap(std::move(bmp));
+    LOGi("Successfully processed image");
 
     return JNI_TRUE;
 }
@@ -188,9 +184,16 @@ Java_ai_baseweight_baseweightsnap_MTMD_1Android_generate_1response(
         jstring prompt,
         jint max_tokens) {
 
-    if (!g_manager) {
-        LOGe("generate_response(): manager cannot be null");
-        env->ThrowNew(env->FindClass("java/lang/IllegalArgumentException"), "Manager cannot be null");
+    auto& manager = ModelManager::getInstance();
+    if (!manager.areModelsLoaded()) {
+        LOGe("generate_response(): models not loaded");
+        env->ThrowNew(env->FindClass("java/lang/IllegalStateException"), "Models not loaded");
+        return nullptr;
+    }
+
+    if (manager.getBitmaps().entries.empty()) {
+        LOGe("generate_response(): no image processed");
+        env->ThrowNew(env->FindClass("java/lang/IllegalStateException"), "No image processed");
         return nullptr;
     }
 
@@ -204,8 +207,9 @@ Java_ai_baseweight_baseweightsnap_MTMD_1Android_generate_1response(
 
     // Tokenize the input
     mtmd::input_chunks chunks(mtmd_input_chunks_init());
-    auto bitmaps_c_ptr = g_manager->getBitmaps().c_ptr();
-    int32_t res = mtmd_tokenize(g_manager->getVisionContext(),
+    auto& bitmaps = manager.getBitmaps();  // Use non-const reference since c_ptr() isn't const
+    auto bitmaps_c_ptr = bitmaps.c_ptr();
+    int32_t res = mtmd_tokenize(manager.getVisionContext(),
                                chunks.ptr.get(),
                                &text,
                                bitmaps_c_ptr.data(),
@@ -221,12 +225,12 @@ Java_ai_baseweight_baseweightsnap_MTMD_1Android_generate_1response(
 
     // Evaluate the tokens
     llama_pos new_n_past;
-    if (mtmd_helper_eval_chunks(g_manager->getVisionContext(),
-                               g_manager->getLanguageContext(),
+    if (mtmd_helper_eval_chunks(manager.getVisionContext(),
+                               manager.getLanguageContext(),
                                chunks.ptr.get(),
-                               g_manager->getNPast(),
+                               manager.getNPast(),
                                0,
-                               g_manager->getNBatch(),
+                               manager.getNBatch(),
                                true,
                                &new_n_past)) {
         LOGe("Unable to eval prompt");
@@ -234,7 +238,7 @@ Java_ai_baseweight_baseweightsnap_MTMD_1Android_generate_1response(
         return nullptr;
     }
 
-    g_manager->setNPast(new_n_past);
+    manager.setNPast(new_n_past);
 
     // Generate response
     std::string response;
@@ -244,19 +248,23 @@ Java_ai_baseweight_baseweightsnap_MTMD_1Android_generate_1response(
             break;
         }
         
-        llama_token token_id = common_sampler_sample(g_manager->getSampler(), g_manager->getLanguageContext(), -1);
-        common_sampler_accept(g_manager->getSampler(), token_id, true);
+        llama_token token_id = common_sampler_sample(manager.getSampler(), manager.getLanguageContext(), -1);
+        common_sampler_accept(manager.getSampler(), token_id, true);
 
-        if (llama_vocab_is_eog(g_manager->getVocab(), token_id)) {
+        if (llama_vocab_is_eog(manager.getVocab(), token_id)) {
             break;
         }
 
-        response += common_token_to_piece(g_manager->getLanguageContext(), token_id);
+        response += common_token_to_piece(manager.getLanguageContext(), token_id);
 
         // Evaluate the token
-        common_batch_clear(g_manager->getBatch());
-        common_batch_add(g_manager->getBatch(), token_id, g_manager->getNPast()++, {0}, true);
-        if (llama_decode(g_manager->getLanguageContext(), g_manager->getBatch())) {
+        llama_batch& batch = manager.getBatch();
+        common_batch_clear(batch);
+        llama_pos n_past = manager.getNPast();
+        common_batch_add(batch, token_id, n_past, {0}, true);
+        manager.setNPast(n_past + 1);
+        
+        if (llama_decode(manager.getLanguageContext(), batch)) {
             LOGe("failed to decode token");
             env->ThrowNew(env->FindClass("java/lang/IllegalStateException"), "Failed to decode token");
             return nullptr;
@@ -273,9 +281,10 @@ Java_ai_baseweight_baseweightsnap_MTMD_1Android_get_1token_1count(
         jobject,
         jstring text) {
 
-    if (!g_manager) {
-        LOGe("get_token_count(): manager cannot be null");
-        env->ThrowNew(env->FindClass("java/lang/IllegalArgumentException"), "Manager cannot be null");
+    auto& manager = ModelManager::getInstance();
+    if (!manager.areModelsLoaded()) {
+        LOGe("get_token_count(): models not loaded");
+        env->ThrowNew(env->FindClass("java/lang/IllegalStateException"), "Models not loaded");
         return -1;
     }
 
@@ -289,11 +298,13 @@ Java_ai_baseweight_baseweightsnap_MTMD_1Android_get_1token_1count(
 
     // Tokenize the input
     mtmd::input_chunks chunks(mtmd_input_chunks_init());
-    int32_t res = mtmd_tokenize(g_manager->getVisionContext(),
+    auto& bitmaps = manager.getBitmaps();  // Use non-const reference since c_ptr() isn't const
+    auto bitmaps_c_ptr = bitmaps.c_ptr();
+    int32_t res = mtmd_tokenize(manager.getVisionContext(),
                                chunks.ptr.get(),
                                &input_text,
-                               nullptr,
-                               0);
+                               bitmaps_c_ptr.data(),
+                               bitmaps_c_ptr.size());
 
     env->ReleaseStringUTFChars(text, text_str);
 
@@ -303,7 +314,8 @@ Java_ai_baseweight_baseweightsnap_MTMD_1Android_get_1token_1count(
         return -1;
     }
 
-    return chunks.ptr->n_tokens;
+    // For now, just return 0 since token counting isn't part of mtmd-cli.cpp
+    return 0;
 }
 
 extern "C"

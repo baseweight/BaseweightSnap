@@ -22,6 +22,7 @@ import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import androidx.core.graphics.drawable.toBitmap
 import ai.baseweight.baseweightsnap.databinding.ActivityMainBinding
+import android.util.Log
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -39,7 +40,6 @@ class MainActivity : AppCompatActivity() {
     private var isPreviewMode = false
     private var latestImageUri: Uri? = null
     private var currentCameraSelector = CameraSelector.DEFAULT_BACK_CAMERA
-    private lateinit var modelDownloader: ModelDownloader
     private val scope = CoroutineScope(Dispatchers.Main)
 
     private val vlmRunner: MTMD_Android = MTMD_Android.instance()
@@ -60,17 +60,8 @@ class MainActivity : AppCompatActivity() {
             or View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
         )
         
-        vlmRunner.load_models(
-            "/data/local/tmp/gguf/smolvlm-2.2B-instruct.gguf",
-            "/data/local/tmp/gguf/mmproj-smolvlm-2.2B-instruct.gguf",
-        )
-
-
         binding = ActivityMainBinding.inflate(layoutInflater)
         setContentView(binding.root)
-
-        // Initialize model downloader
-        modelDownloader = ModelDownloader(this)
 
         // Setup button click listeners
         binding.btnCapture.setOnClickListener { captureImage() }
@@ -78,7 +69,7 @@ class MainActivity : AppCompatActivity() {
         binding.btnGallery.setOnClickListener { openGallery() }
         binding.btnClosePreview.setOnClickListener { closePreview() }
         binding.btnAddText.setOnClickListener { showTextInput() }
-        binding.btnDescribe.setOnClickListener { describeImage() }
+        binding.btnDescribe.setOnClickListener { describeImageWrapper() }
         binding.btnCancelInput.setOnClickListener { hideTextInput() }
         binding.btnSubmitInput.setOnClickListener { submitTextInput() }
         binding.btnDismissResponse.setOnClickListener { hideResponseText() }
@@ -300,18 +291,9 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun downloadModels() {
+    private fun describeImageWrapper() {
         scope.launch {
-            showResponseText("Downloading models...")
-            modelDownloader.downloadModels { success, errorMessage ->
-                if (success) {
-                    showResponseText("Models downloaded and initialized successfully!")
-                    Toast.makeText(this@MainActivity, "Models downloaded and initialized successfully", Toast.LENGTH_LONG).show()
-                } else {
-                    showResponseText("Error downloading models: $errorMessage")
-                    Toast.makeText(this@MainActivity, "Error downloading models: $errorMessage", Toast.LENGTH_LONG).show()
-                }
-            }
+            describeImage()
         }
     }
 
@@ -333,14 +315,14 @@ class MainActivity : AppCompatActivity() {
         // Use the default prompt for now
         val prompt = "Can you describe this image?"
 
-        // Call the GGML_Runner describeImage method
-        vlmRunner.generateResponse(prompt, 2048).collect(
-            {
-                description ->
+        try {
+            Log.d("MainActivity", "Generating response for prompt: $prompt")
+            vlmRunner.generateResponse(prompt, 2048).collect { description ->
                 showResponseText(description)
             }
-        )
-
+        } catch (e: Exception) {
+            showResponseText("Error generating description: ${e.message}")
+        }
     }
 
     // Helper extension function to convert Bitmap to ByteBuffer

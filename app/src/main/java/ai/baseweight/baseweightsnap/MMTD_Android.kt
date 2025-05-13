@@ -45,7 +45,7 @@ class MTMD_Android {
     private external fun system_info(): String
     private external fun load_models(languageModelPath: String, mmprojPath: String): Boolean
     private external fun free_models()
-    private external fun process_image_from_file(image_path: String): Boolean
+    private external fun process_image(image_path: String): Boolean
     private external fun generate_response(prompt: String, max_tokens: Int): String
     private external fun get_token_count(text: String): Int
     private external fun stop_generation()
@@ -70,7 +70,7 @@ class MTMD_Android {
             FileOutputStream(tempFile).use { out ->
                 bitmap.compress(Bitmap.CompressFormat.PNG, 100, out)
             }
-            return process_image_from_file(tempFile.absolutePath)
+            return process_image(tempFile.absolutePath)
         } finally {
             tempFile.delete()
         }

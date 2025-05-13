@@ -17,14 +17,24 @@ if(${CMAKE_ANDROID_ARCH_ABI} STREQUAL "arm64-v8a")
     set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -march=armv8.4a+dotprod")
 endif()
 
+set(LLAMA_CURL OFF)
+
 #load local llama.cpp
 add_subdirectory(llama.cpp build-llama)
+add_subdirectory(llama.cpp/common build-common)
 add_subdirectory(llama.cpp/tools/mtmd build-mtmd)
 
 add_library(${CMAKE_PROJECT_NAME} SHARED
         # List C/C++ source files with relative paths to this CMakeLists.txt.
         mtmd-android.cpp
         model_manager.cpp)
+
+# Add include directories
+target_include_directories(${CMAKE_PROJECT_NAME} PUBLIC
+        ${CMAKE_CURRENT_SOURCE_DIR}/llama.cpp/common
+        ${CMAKE_CURRENT_SOURCE_DIR}/llama.cpp/tools/mtmd
+        ${CMAKE_CURRENT_SOURCE_DIR}/llama.cpp/src
+        ${CMAKE_CURRENT_SOURCE_DIR}/llama.cpp/ggml/src)
 
 # Specifies libraries CMake should link to your target library. You
 # can link libraries from various origins, such as libraries defined in this
