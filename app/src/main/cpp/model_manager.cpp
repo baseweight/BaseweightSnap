@@ -73,7 +73,9 @@ bool ModelManager::loadLanguageModel(const char* model_path) {
     cleanup();  // Clean up any existing models first
     
     llama_model_params model_params = llama_model_default_params();
-    model = llama_load_model_from_file(model_path, model_params);
+    // Let's try something here
+    model_params.n_gpu_layers = 32;
+    model = llama_model_load_from_file(model_path, model_params);
     if (!model) {
         LOGe("Failed to load language model from %s", model_path);
         return false;
