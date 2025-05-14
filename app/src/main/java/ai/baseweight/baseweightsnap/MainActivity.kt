@@ -283,12 +283,15 @@ class MainActivity : AppCompatActivity() {
     private fun submitTextInput() {
         val prompt = binding.promptInput.text?.toString() ?: ""
         if (prompt.isNotEmpty()) {
-            // Show the response text
-            showResponseText("Prompt: $prompt")
-            
             // Clear and hide the input
             binding.promptInput.text?.clear()
             hideTextInput()
+
+            // Submit the prompt
+            scope.launch {
+                describeImage(prompt)
+            }
+
         }
     }
 
@@ -298,7 +301,7 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private suspend fun describeImage() {
+    private suspend fun describeImage(prompt: String = "Can you describe this image") {
         if (latestImageUri == null) {
             showResponseText("No image selected")
             return
@@ -313,8 +316,6 @@ class MainActivity : AppCompatActivity() {
 
         vlmRunner.processImage(bitmap)
 
-        // Use the default prompt for now
-        val prompt = "Can you describe this image?"
 
         showResponseText("Generating description...")
 
