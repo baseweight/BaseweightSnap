@@ -314,13 +314,13 @@ class MainActivity : AppCompatActivity() {
             return
         }
 
-        vlmRunner.processImage(bitmap)
-
-
-        showResponseText("Generating description...")
-
+        showResponseText("Processing image...")
         val textView = binding.responseText
         textView.visibility = View.VISIBLE  // Ensure it's visible
+
+        vlmRunner.processImage(bitmap)
+
+        textView.text = "Generating description..."
 
         try {
             Log.d("MainActivity", "Generating response for prompt: $prompt")
@@ -381,6 +381,7 @@ class MainActivity : AppCompatActivity() {
         if (requestCode == REQUEST_IMAGE_PICK && resultCode == RESULT_OK) {
             data?.data?.let { uri ->
                 binding.imagePreview.setImageURI(uri)
+                latestImageUri = uri
                 showPreviewMode(true)
             }
         }

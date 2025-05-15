@@ -27,10 +27,6 @@ void ModelManager::cleanup() {
         llama_free_model(model);
         model = nullptr;
     }
-    if (ctx_vision) {
-        mtmd_free(ctx_vision);
-        ctx_vision = nullptr;
-    }
     vocab = nullptr;
     n_past = 0;
     bitmaps.entries.clear();
@@ -91,8 +87,8 @@ bool ModelManager::loadVisionModel(const char* mmproj_path) {
     mparams.n_threads = 1;
     mparams.verbosity = GGML_LOG_LEVEL_INFO;
     
-    ctx_vision = mtmd_init_from_file(mmproj_path, model, mparams);
-    if (!ctx_vision) {
+    ctx_vision.reset(mtmd_init_from_file(mmproj_path, model, mparams));
+    if (!ctx_vision.get()) {
         LOGe("Failed to load vision model from %s", mmproj_path);
         return false;
     }
@@ -146,7 +142,19 @@ void ModelManager::addBitmap(mtmd::bitmap&& bmp) {
 }
 
 void ModelManager::generateResponseAsync(const char* prompt, int max_tokens, JNIEnv* env, jobject callback) {
-    if (!evalMessage(prompt, true)) {  // Add BOS token for first message
+
+    // This ate up literal days of my life
+    std::string str_prompt(prompt);
+    if(str_prompt.find("<__image__>") == std::string::npos) {
+        str_prompt = " <__image__> " + str_prompt;
+    }
+
+    // Create chat message
+    common_chat_msg msg;
+    msg.role = "user";
+    msg.content = str_prompt;
+
+    if (!evalMessage(msg, true)) {  // Add BOS token for first message
         onGenerationError("Failed to evaluate message", env, callback);
         return;
     }
@@ -189,16 +197,12 @@ void ModelManager::generateResponseAsync(const char* prompt, int max_tokens, JNI
 
 }
 
-bool ModelManager::evalMessage(const char* prompt, bool add_bos) {
+bool ModelManager::evalMessage(common_chat_msg& msg, bool add_bos) {
     if (!tmpls) {
         LOGe("Chat templates not initialized");
         return false;
     }
 
-    // Create chat message
-    common_chat_msg msg;
-    msg.role = "user";
-    msg.content = prompt;
 
     // Format chat message using templates
     common_chat_templates_inputs tmpl_inputs;
@@ -216,7 +220,7 @@ bool ModelManager::evalMessage(const char* prompt, bool add_bos) {
     mtmd::input_chunks chunks(mtmd_input_chunks_init());
     auto& bitmaps = getBitmaps();  // Use non-const reference since c_ptr() isn't const
     auto bitmaps_c_ptr = bitmaps.c_ptr();
-    int32_t res = mtmd_tokenize(ctx_vision,
+    int32_t res = mtmd_tokenize(ctx_vision.get(),
                                chunks.ptr.get(),
                                &text,
                                bitmaps_c_ptr.data(),
@@ -226,11 +230,8 @@ bool ModelManager::evalMessage(const char* prompt, bool add_bos) {
         return false;
     }
 
-    // Clear bitmaps after tokenization
-    bitmaps.entries.clear();
-
     llama_pos new_n_past;
-    if (mtmd_helper_eval_chunks(ctx_vision,
+    if (mtmd_helper_eval_chunks(ctx_vision.get(),
                                lctx,
                                chunks.ptr.get(),
                                n_past,
@@ -243,6 +244,9 @@ bool ModelManager::evalMessage(const char* prompt, bool add_bos) {
     }
 
     n_past = new_n_past;
+    
+    // Clear bitmaps only after successful evaluation
+    bitmaps.entries.clear();
     return true;
 }
 

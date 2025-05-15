@@ -47,10 +47,10 @@ public:
     // Text generation
     std::string generateResponse(const char* prompt, int max_tokens);
     void generateResponseAsync(const char* prompt, int max_tokens, JNIEnv* env, jobject callback);
-    bool evalMessage(const char* prompt, bool add_bos = false);
+    bool evalMessage(common_chat_msg& msg, bool add_bos = false);
 
     // Getters
-    mtmd_context* getVisionContext() const { return ctx_vision; }
+    mtmd_context* getVisionContext() const { return ctx_vision.get(); }
     llama_context* getLanguageContext() const { return lctx; }
     llama_model* getModel() const { return model; }
     const llama_vocab* getVocab() const { return vocab; }
@@ -73,7 +73,7 @@ private:
     void onGenerationError(const std::string& error, JNIEnv* env, jobject callback);
 
     // Vision context
-    mtmd_context* ctx_vision = nullptr;
+    mtmd::context_ptr ctx_vision;
     
     // Language model
     llama_model* model = nullptr;

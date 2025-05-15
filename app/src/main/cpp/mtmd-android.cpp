@@ -285,3 +285,44 @@ Java_ai_baseweight_baseweightsnap_MTMD_1Android_reset_1stop_1flag(
     g_should_stop = false;
 }
 
+
+extern "C"
+JNIEXPORT jboolean JNICALL
+Java_ai_baseweight_baseweightsnap_MTMD_1Android_process_1image_1from_1byteBuff(JNIEnv *env,
+                                                                               jobject thiz,
+                                                                               jobject arr,
+                                                                               jint width,
+                                                                               jint height) {
+    // TODO: implement process_image_from_byteBuff()
+    jbyte* buff = (jbyte*)env->GetDirectBufferAddress(arr);
+    jlong buff_len = env->GetDirectBufferCapacity(arr);
+    if (buff_len != width * height * 4) {
+        LOGe("Buffer size mismatch: expected %zu, got %lld", width * height * 4, buff_len);
+        return JNI_FALSE;
+    }
+
+    size_t len = width * height * 3;
+    // Allocate memory for RGB buffer (raw pointer since mtmd takes ownership)
+    uint8_t* rgb_buffer = new uint8_t[len];
+    
+    // Convert BGRA to RGB
+    for (size_t i = 0; i < width * height; ++i) {
+        size_t src_idx = i * 4;
+        size_t dst_idx = i * 3;
+        
+        // Skip alpha channel (BGR -> RGB)
+        rgb_buffer[dst_idx + 0] = buff[src_idx + 2]; // R
+        rgb_buffer[dst_idx + 1] = buff[src_idx + 1]; // G
+        rgb_buffer[dst_idx + 2] = buff[src_idx + 0]; // B;
+    }
+
+    // We load directly from the buffer since mtmd takes ownership
+    // this is better than copying to file or messing around with PNG decoding
+    mtmd::bitmap bmp(width, height, rgb_buffer);
+
+    // Store the bitmap in the manager
+    ModelManager::getInstance().addBitmap(std::move(bmp));
+    LOGi("Successfully processed image");
+
+    return JNI_TRUE;
+}

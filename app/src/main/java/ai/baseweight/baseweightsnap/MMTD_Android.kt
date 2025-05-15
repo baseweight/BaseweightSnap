@@ -13,6 +13,7 @@ import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.io.FileOutputStream
+import java.nio.ByteBuffer
 import java.util.concurrent.Executors
 import kotlin.concurrent.thread
 
@@ -49,6 +50,7 @@ class MTMD_Android {
     private external fun load_models(languageModelPath: String, mmprojPath: String): Boolean
     private external fun free_models()
     private external fun process_image(image_path: String): Boolean
+    private external fun process_image_from_byteBuff(arr: ByteBuffer, width: Int, height: Int): Boolean
     private external fun generate_response(
         prompt: String,
         max_tokens: Int,
@@ -71,16 +73,14 @@ class MTMD_Android {
     }
 
     fun processImage(bitmap: Bitmap): Boolean {
-        // Save bitmap to a temporary file
-        val tempFile = File.createTempFile("image", ".png")
-        try {
-            FileOutputStream(tempFile).use { out ->
-                bitmap.compress(Bitmap.CompressFormat.PNG, 100, out)
-            }
-            return process_image(tempFile.absolutePath)
-        } finally {
-            tempFile.delete()
-        }
+        // Ensure bitmap is in ARGB_8888 format
+        val config = if (bitmap.config == Bitmap.Config.ARGB_8888) bitmap else bitmap.copy(Bitmap.Config.ARGB_8888, false)
+        
+        val byteBuffer = ByteBuffer.allocateDirect(config.byteCount)
+        config.copyPixelsToBuffer(byteBuffer)
+        byteBuffer.rewind()
+        return process_image_from_byteBuff(byteBuffer, config.width, config.height)
+
     }
 
     fun generateResponse(prompt: String, maxTokens: Int): Flow<String> = callbackFlow {
