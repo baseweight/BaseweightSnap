@@ -1,10 +1,13 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="api_key">Z3zh9E4l_quBpjLJ55Hv-YFIXPFCXHwK0a9bT1MQHzg</string>
-    <string name="api_base_url">https://stage-api.baseweight.ai</string>
+    <string name="baseweight_api_key">1Nly86urxCG0r5dKSODIgr04uIX6vPXtIl8cvmjl938</string>
+    <string name="api_base_url">https://api.baseweight.ai</string>
     
     <!-- Model IDs -->
-    <string name="model_id_decoder">fae86e9d-3e74-433c-b1b5-2fca0f3f8cb8</string>
-    <string name="model_id_embed">d9b5a162-0c33-4209-94db-8e201707e38d</string>
-    <string name="model_id_vision">668823fa-3aaa-4811-ab92-7dd8b235a93e</string>
+    <string name="smolvlm2_2_2b_language">3fccbcf1-d871-4d57-9ae3-a5a33b246d19</string>
+    <string name="smolvlm2_2_2b_vision">202dfe24-bc54-46f8-8118-0e91e925b803</string>
+    <string name="smolvlm2_500M_language">417e1722-d2ed-42d8-b1ef-c1bf610cd791</string>
+    <string name="smolvlm2_500M_vision">6a1726de-7036-4b0d-884f-49df475e04f8</string>
+    <string name="smolvlm_500M_language">e3e8315b-99cd-4ae5-8cc9-c8738ae8aa1e</string>
+    <string name="smolvlm_500M_vision">8ccd519a-620a-4a1d-98ba-a9712a95a1b4</string>
 </resources> 
