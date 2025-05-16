@@ -4,6 +4,7 @@
 #include "model_manager.h"
 #include <android/log.h>
 #include <jni.h>
+#include <chrono>
 
 // Global flag to control generation
 std::atomic<bool> g_should_stop{false};
@@ -76,7 +77,7 @@ bool ModelManager::loadLanguageModel(const char* model_path) {
     
     llama_model_params model_params = llama_model_default_params();
     // Let's try something here
-    model_params.n_gpu_layers = 32;
+    model_params.n_gpu_layers = gpu_layers;
     model = llama_model_load_from_file(model_path, model_params);
     if (!model) {
         LOGe("Failed to load language model from %s", model_path);
@@ -89,6 +90,7 @@ bool ModelManager::loadLanguageModel(const char* model_path) {
 bool ModelManager::loadVisionModel(const char* mmproj_path) {
     mtmd_context_params mparams = mtmd_context_params_default();
     mparams.use_gpu = true;  // Enable GPU by default
+
     mparams.print_timings = true;
     mparams.n_threads = 1;
     mparams.verbosity = GGML_LOG_LEVEL_INFO;
@@ -106,7 +108,7 @@ bool ModelManager::initializeContext() {
     ctx_params.n_ctx = 4096;  // Adjust based on your needs
     ctx_params.n_batch = n_batch;
     
-    lctx = llama_new_context_with_model(model, ctx_params);
+    lctx = llama_init_from_model(model, ctx_params);
     if (!lctx) {
         LOGe("Failed to create language context");
         return false;
@@ -159,6 +161,7 @@ void ModelManager::generateResponseAsync(const char* prompt, int max_tokens, JNI
     common_chat_msg msg;
     msg.role = "user";
     msg.content = str_prompt;
+
 
     if (!evalMessage(msg, true)) {  // Add BOS token for first message
         onGenerationError("Failed to evaluate message", env, callback);
@@ -236,17 +239,26 @@ bool ModelManager::evalMessage(common_chat_msg& msg, bool add_bos) {
     mtmd::input_chunks chunks(mtmd_input_chunks_init());
     auto& bitmaps = getBitmaps();  // Use non-const reference since c_ptr() isn't const
     auto bitmaps_c_ptr = bitmaps.c_ptr();
+
+    
+    auto start_time = std::chrono::high_resolution_clock::now();
     int32_t res = mtmd_tokenize(ctx_vision.get(),
                                chunks.ptr.get(),
                                &text,
                                bitmaps_c_ptr.data(),
                                bitmaps_c_ptr.size());
+    auto end_time = std::chrono::high_resolution_clock::now();
+    auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end_time - start_time);
+    LOGi("Tokenization time: %d ms", duration.count());
+
     if (res != 0) {
         LOGe("Unable to tokenize prompt, res = %d", res);
         return false;
     }
 
+
     llama_pos new_n_past;
+    start_time = std::chrono::high_resolution_clock::now();
     if (mtmd_helper_eval_chunks(ctx_vision.get(),
                                lctx,
                                chunks.ptr.get(),
@@ -258,10 +270,13 @@ bool ModelManager::evalMessage(common_chat_msg& msg, bool add_bos) {
         LOGe("Unable to eval prompt");
         return false;
     }
-
+    end_time = std::chrono::high_resolution_clock::now();
+    duration = std::chrono::duration_cast<std::chrono::milliseconds>(end_time - start_time);
+    auto duration_ms = duration.count();
+    LOGi("Evaluation time: %d ms", duration_ms);
     n_past = new_n_past;
-    
-    // Clear bitmaps only after successful evaluation
+
+    // Live dangerously
     bitmaps.entries.clear();
     return true;
 }

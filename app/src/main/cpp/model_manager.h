@@ -83,8 +83,9 @@ private:
     llama_context* lctx = nullptr;
     const llama_vocab* vocab = nullptr;
     llama_batch batch;
-    int n_batch = 512;  // Default to a larger batch size for better performance
+    int n_batch = 1024;  // Default to a larger batch size for better performance
     llama_pos n_past = 0;
+    int gpu_layers = 512;
     
     // Sampler
     common_sampler* sampler = nullptr;
