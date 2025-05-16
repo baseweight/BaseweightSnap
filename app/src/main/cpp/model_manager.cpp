@@ -1,6 +1,12 @@
+#include "common.h"
+#include "mtmd.h"
+#include "clip.h"
 #include "model_manager.h"
 #include <android/log.h>
 #include <jni.h>
+
+// Global flag to control generation
+std::atomic<bool> g_should_stop{false};
 
 #define TAG "model_manager.cpp"
 #define LOGi(...) __android_log_print(ANDROID_LOG_INFO, TAG, __VA_ARGS__)
@@ -163,6 +169,12 @@ void ModelManager::generateResponseAsync(const char* prompt, int max_tokens, JNI
     int n_predict = max_tokens;
 
     for (int i = 0; i < n_predict; i++) {
+        // Check if we should stop
+        if (g_should_stop) {
+            onGenerationComplete(env, callback);
+            return;
+        }
+
         llama_token token_id = common_sampler_sample(sampler, lctx, -1);
         generated_tokens.push_back(token_id);
         common_sampler_accept(sampler, token_id, true);
@@ -184,6 +196,11 @@ void ModelManager::generateResponseAsync(const char* prompt, int max_tokens, JNI
             return;
         }
 
+        // Check again before decoding
+        if (g_should_stop) {
+            onGenerationComplete(env, callback);
+            return;
+        }
 
         // Evaluate the token
         common_batch_clear(batch);
@@ -202,7 +219,6 @@ bool ModelManager::evalMessage(common_chat_msg& msg, bool add_bos) {
         LOGe("Chat templates not initialized");
         return false;
     }
-
 
     // Format chat message using templates
     common_chat_templates_inputs tmpl_inputs;

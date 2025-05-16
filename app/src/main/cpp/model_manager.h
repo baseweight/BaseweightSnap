@@ -15,6 +15,9 @@
 #define LOGi(...) __android_log_print(ANDROID_LOG_INFO, TAG, __VA_ARGS__)
 #define LOGe(...) __android_log_print(ANDROID_LOG_ERROR, TAG, __VA_ARGS__)
 
+// Global flag to control generation
+extern std::atomic<bool> g_should_stop;
+
 class ModelManager {
 public:
     // Delete copy constructor and assignment operator
