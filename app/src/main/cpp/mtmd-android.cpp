@@ -50,7 +50,7 @@ JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM* vm, void* reserved) {
     return JNI_VERSION_1_6;
 }
 
-static std::atomic<bool> g_should_stop{false};
+
 
 bool is_valid_utf8(const char * string) {
     if (!string) {

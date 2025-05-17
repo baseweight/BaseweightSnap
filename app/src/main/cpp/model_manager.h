@@ -15,6 +15,9 @@
 #define LOGi(...) __android_log_print(ANDROID_LOG_INFO, TAG, __VA_ARGS__)
 #define LOGe(...) __android_log_print(ANDROID_LOG_ERROR, TAG, __VA_ARGS__)
 
+// Global flag to control generation
+extern std::atomic<bool> g_should_stop;
+
 class ModelManager {
 public:
     // Delete copy constructor and assignment operator
@@ -80,8 +83,9 @@ private:
     llama_context* lctx = nullptr;
     const llama_vocab* vocab = nullptr;
     llama_batch batch;
-    int n_batch = 512;  // Default to a larger batch size for better performance
+    int n_batch = 1024;  // Default to a larger batch size for better performance
     llama_pos n_past = 0;
+    int gpu_layers = 512;
     
     // Sampler
     common_sampler* sampler = nullptr;

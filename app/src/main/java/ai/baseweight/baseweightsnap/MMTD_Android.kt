@@ -66,6 +66,10 @@ class MTMD_Android {
         }
     }
 
+    fun stopGeneration() {
+        stop_generation()
+    }
+
     suspend fun unloadModels() {
         withContext(runLoop) {
             free_models()

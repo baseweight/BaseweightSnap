@@ -25,6 +25,7 @@ import ai.baseweight.baseweightsnap.databinding.ActivityMainBinding
 import android.util.Log
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
@@ -42,7 +43,7 @@ class MainActivity : AppCompatActivity() {
     private var latestImageUri: Uri? = null
     private var currentCameraSelector = CameraSelector.DEFAULT_BACK_CAMERA
     private val scope = CoroutineScope(Dispatchers.Main)
-
+    private var generationJob: Job? = null
     private val vlmRunner: MTMD_Android = MTMD_Android.instance()
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -213,7 +214,14 @@ class MainActivity : AppCompatActivity() {
         binding.btnDismissResponse.visibility = View.VISIBLE
     }
 
+    private fun stopGeneration() {
+        generationJob?.cancel()
+        vlmRunner.stopGeneration()
+    }
+
     private fun hideResponseText() {
+        stopGeneration()
+        binding.responseText.text = ""  // Clear the text
         binding.responseText.visibility = View.GONE
         binding.btnDismissResponse.visibility = View.GONE
     }
@@ -324,7 +332,7 @@ class MainActivity : AppCompatActivity() {
 
         try {
             Log.d("MainActivity", "Generating response for prompt: $prompt")
-            scope.launch {
+            generationJob = scope.launch {
                 vlmRunner.generateResponse(prompt, 2048).collect { text ->
                     Log.d("MainActivity", "Received text: $text")
                     withContext(Dispatchers.Main) {
@@ -389,6 +397,7 @@ class MainActivity : AppCompatActivity() {
 
     override fun onDestroy() {
         super.onDestroy()
+        stopGeneration()  // Stop any ongoing generation
         cameraExecutor.shutdown()
     }
 
