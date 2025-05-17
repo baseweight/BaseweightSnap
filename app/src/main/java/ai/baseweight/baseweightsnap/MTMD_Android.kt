@@ -7,12 +7,9 @@ import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.channels.onFailure
-import kotlinx.coroutines.channels.trySendBlocking
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.withContext
-import java.io.File
-import java.io.FileOutputStream
 import java.nio.ByteBuffer
 import java.util.concurrent.Executors
 import kotlin.concurrent.thread
@@ -84,7 +81,6 @@ class MTMD_Android {
         config.copyPixelsToBuffer(byteBuffer)
         byteBuffer.rewind()
         return process_image_from_byteBuff(byteBuffer, config.width, config.height)
-
     }
 
     fun generateResponse(prompt: String, maxTokens: Int): Flow<String> = callbackFlow {
@@ -107,6 +103,13 @@ class MTMD_Android {
 
                 override fun onGenerationError(error: String) {
                     cancel("Generation error: $error", null)
+                }
+
+                override fun onProgressUpdate(phase: String, progress: Int) {
+                    trySend("PROGRESS:$phase:$progress").onFailure {
+                        exception: Throwable? ->
+                        Log.e(tag, "Failed to send progress update", exception)
+                    }
                 }
             }
 

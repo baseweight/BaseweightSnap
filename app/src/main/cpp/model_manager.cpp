@@ -9,6 +9,9 @@
 // Global flag to control generation
 std::atomic<bool> g_should_stop{false};
 
+// Initialize static member
+JavaVM* ModelManager::javaVM = nullptr;
+
 #define TAG "model_manager.cpp"
 #define LOGi(...) __android_log_print(ANDROID_LOG_INFO, TAG, __VA_ARGS__)
 #define LOGe(...) __android_log_print(ANDROID_LOG_ERROR, TAG, __VA_ARGS__)
@@ -149,7 +152,49 @@ void ModelManager::addBitmap(mtmd::bitmap&& bmp) {
     bitmaps.entries.push_back(std::move(bmp));
 }
 
+void ModelManager::setCurrentCallback(JNIEnv* env, jobject callback) {
+    // Store JavaVM pointer if not already stored
+    if (!javaVM) {
+        env->GetJavaVM(&javaVM);
+    }
+
+    if (currentCallback) {
+        env->DeleteGlobalRef(currentCallback);
+    }
+    currentCallback = env->NewGlobalRef(callback);
+}
+
+void ModelManager::clearCurrentCallback(JNIEnv* env) {
+    if (currentCallback) {
+        env->DeleteGlobalRef(currentCallback);
+        currentCallback = nullptr;
+    }
+}
+
+JNIEnv* ModelManager::getJNIEnv() {
+    if (!javaVM) {
+        return nullptr;
+    }
+
+    JNIEnv* env = nullptr;
+    jint result = javaVM->GetEnv((void**)&env, JNI_VERSION_1_6);
+    if (result == JNI_EDETACHED) {
+        // Thread is not attached to JVM, attach it
+        result = javaVM->AttachCurrentThread(&env, nullptr);
+        if (result != JNI_OK) {
+            LOGe("Failed to attach thread to JVM");
+            return nullptr;
+        }
+    } else if (result != JNI_OK) {
+        LOGe("Failed to get JNIEnv");
+        return nullptr;
+    }
+    return env;
+}
+
 void ModelManager::generateResponseAsync(const char* prompt, int max_tokens, JNIEnv* env, jobject callback) {
+    // Store the callback
+    setCurrentCallback(env, callback);
 
     // This ate up literal days of my life
     std::string str_prompt(prompt);
@@ -162,9 +207,9 @@ void ModelManager::generateResponseAsync(const char* prompt, int max_tokens, JNI
     msg.role = "user";
     msg.content = str_prompt;
 
-
     if (!evalMessage(msg, true)) {  // Add BOS token for first message
         onGenerationError("Failed to evaluate message", env, callback);
+        clearCurrentCallback(env);
         return;
     }
 
@@ -175,7 +220,7 @@ void ModelManager::generateResponseAsync(const char* prompt, int max_tokens, JNI
         // Check if we should stop
         if (g_should_stop) {
             onGenerationComplete(env, callback);
-            return;
+            break;
         }
 
         llama_token token_id = common_sampler_sample(sampler, lctx, -1);
@@ -184,7 +229,7 @@ void ModelManager::generateResponseAsync(const char* prompt, int max_tokens, JNI
 
         if (llama_vocab_is_eog(vocab, token_id) || checkAntiprompt(generated_tokens)) {
             onGenerationComplete(env, callback);
-            return;
+            break;
         }
 
         // Convert token to text
@@ -196,13 +241,13 @@ void ModelManager::generateResponseAsync(const char* prompt, int max_tokens, JNI
         // Check if we've generated enough tokens
         if (i >= n_predict - 1) {
             onGenerationComplete(env, callback);
-            return;
+            break;
         }
 
         // Check again before decoding
         if (g_should_stop) {
             onGenerationComplete(env, callback);
-            return;
+            break;
         }
 
         // Evaluate the token
@@ -211,10 +256,12 @@ void ModelManager::generateResponseAsync(const char* prompt, int max_tokens, JNI
         if (llama_decode(lctx, batch)) {
             LOGe("failed to decode token");
             onGenerationError("Failed to decode token", env, callback);
-            return;
+            break;
         }
     }
 
+    // Clean up the callback at the end
+    clearCurrentCallback(env);
 }
 
 bool ModelManager::evalMessage(common_chat_msg& msg, bool add_bos) {
@@ -237,28 +284,34 @@ bool ModelManager::evalMessage(common_chat_msg& msg, bool add_bos) {
     text.parse_special = true;
 
     mtmd::input_chunks chunks(mtmd_input_chunks_init());
-    auto& bitmaps = getBitmaps();  // Use non-const reference since c_ptr() isn't const
+    auto& bitmaps = getBitmaps();
     auto bitmaps_c_ptr = bitmaps.c_ptr();
 
+    // Get JNIEnv for the current thread
+    JNIEnv* env = getJNIEnv();
     
-    auto start_time = std::chrono::high_resolution_clock::now();
+    // Send progress update for tokenization
+    if (env && currentCallback) {
+        onTextGenerated("PROGRESS:Tokenizing input...:10", env, currentCallback);
+    }
+    
     int32_t res = mtmd_tokenize(ctx_vision.get(),
                                chunks.ptr.get(),
                                &text,
                                bitmaps_c_ptr.data(),
                                bitmaps_c_ptr.size());
-    auto end_time = std::chrono::high_resolution_clock::now();
-    auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end_time - start_time);
-    LOGi("Tokenization time: %d ms", duration.count());
 
     if (res != 0) {
         LOGe("Unable to tokenize prompt, res = %d", res);
         return false;
     }
 
+    // Send progress update for evaluation
+    if (env && currentCallback) {
+        onTextGenerated("PROGRESS:Evaluating chunks...:30", env, currentCallback);
+    }
 
     llama_pos new_n_past;
-    start_time = std::chrono::high_resolution_clock::now();
     if (mtmd_helper_eval_chunks(ctx_vision.get(),
                                lctx,
                                chunks.ptr.get(),
@@ -270,10 +323,12 @@ bool ModelManager::evalMessage(common_chat_msg& msg, bool add_bos) {
         LOGe("Unable to eval prompt");
         return false;
     }
-    end_time = std::chrono::high_resolution_clock::now();
-    duration = std::chrono::duration_cast<std::chrono::milliseconds>(end_time - start_time);
-    auto duration_ms = duration.count();
-    LOGi("Evaluation time: %d ms", duration_ms);
+
+    // Send progress update for completion
+    if (env && currentCallback) {
+        onTextGenerated("PROGRESS:Processing complete:100", env, currentCallback);
+    }
+
     n_past = new_n_past;
 
     // Live dangerously

@@ -97,4 +97,11 @@ private:
     common_chat_templates_ptr tmpls;
     llama_tokens antiprompt_tokens;
     bool checkAntiprompt(const llama_tokens& generated_tokens) const;
+
+    // Callback handling
+    jobject currentCallback = nullptr;
+    static JavaVM* javaVM;
+    void setCurrentCallback(JNIEnv* env, jobject callback);
+    void clearCurrentCallback(JNIEnv* env);
+    JNIEnv* getJNIEnv();
 };

@@ -34,6 +34,9 @@ import java.text.SimpleDateFormat
 import java.util.Locale
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
+import android.app.AlertDialog
+import android.widget.ProgressBar
+import android.widget.TextView
 
 class MainActivity : AppCompatActivity() {
     private lateinit var binding: ActivityMainBinding
@@ -322,34 +325,60 @@ class MainActivity : AppCompatActivity() {
             return
         }
 
-        showResponseText("Processing image...")
-        val textView = binding.responseText
-        textView.visibility = View.VISIBLE  // Ensure it's visible
+        // Create progress dialog
+        val progressDialog = AlertDialog.Builder(this).apply {
+            setTitle("Processing Image")
+            setView(R.layout.dialog_progress)
+            setCancelable(false)
+        }.create()
 
-        vlmRunner.processImage(bitmap)
+        // Show progress dialog before starting processing
+        progressDialog.show()
 
-        textView.text = "Generating description..."
+        // Get progress views
+        val progressBar = progressDialog.findViewById<ProgressBar>(R.id.progressBar)
+        val progressText = progressDialog.findViewById<TextView>(R.id.progressText)
+
+        // Hide text view initially
+        binding.responseText.visibility = View.GONE
+        binding.btnDismissResponse.visibility = View.GONE
 
         try {
+            vlmRunner.processImage(bitmap)
+
             Log.d("MainActivity", "Generating response for prompt: $prompt")
             generationJob = scope.launch {
                 vlmRunner.generateResponse(prompt, 2048).collect { text ->
                     Log.d("MainActivity", "Received text: $text")
                     withContext(Dispatchers.Main) {
-                        Log.d("MainActivity", "Generated text: $text")
-                        if(textView.text == "Generating description...") {
-                            textView.text = text
+                        if (text.startsWith("PROGRESS:")) {
+                            // Handle progress update
+                            val parts = text.substring(9).split(":")
+                            if (parts.size == 2) {
+                                val (phase, progress) = parts
+                                progressText?.text = phase
+                                progressBar?.progress = progress.toInt()
+                            }
                         } else {
-                            textView.append(text)
+                            // Handle generated text
+                            Log.d("MainActivity", "Generated text: $text")
+                            // Show text view and dismiss dialog when we get actual text
+                            progressDialog.dismiss()
+                            binding.responseText.visibility = View.VISIBLE
+                            binding.btnDismissResponse.visibility = View.VISIBLE
+                            if(binding.responseText.text.isEmpty()) {
+                                binding.responseText.text = text
+                            } else {
+                                binding.responseText.append(text)
+                            }
+                            binding.responseText.invalidate()
                         }
-                        // Force layout update
-                        textView.invalidate()
                     }
                 }
             }
-        }
-        catch (e: Exception) {
+        } catch (e: Exception) {
             Log.e("MainActivity", "Error generating response", e)
+            progressDialog.dismiss()
             showResponseText("Error generating response: ${e.message}")
         }
     }

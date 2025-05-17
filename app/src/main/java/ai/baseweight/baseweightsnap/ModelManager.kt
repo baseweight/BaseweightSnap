@@ -50,7 +50,7 @@ class ModelManager(private val context: Context) {
         private const val TAG = "ModelManager"
         private const val BASE_URL = "https://api.baseweight.ai/api"
         private const val MODELS_DIR = "models"
-        const val DEFAULT_MODEL_NAME = "SmolVLM-2.2B-Instruct"
+        const val DEFAULT_MODEL_NAME = "SmolVLM2-256M-VidInstruct"
     }
 
     private val apiKey: String by lazy {
@@ -61,6 +61,36 @@ class ModelManager(private val context: Context) {
     val availableModels = listOf(
         MTMDModel(
             name = DEFAULT_MODEL_NAME,
+            language = Model(
+                id = context.getString(R.string.smolvlm2_256M_language),
+                name = "SmolVLM",
+                size = 416_570_000L, // 1838.62 MB
+                isDefault = true
+            ),
+            vision = Model(
+                id = context.getString(R.string.smolvlm2_256M_vision),
+                name = "SmolVLM",
+                size = 103_740_000L, // 565.07 MB
+                isDefault = true
+            )
+        ),
+        MTMDModel(
+            name = "SmolVLM2-500M-VidInstruct",
+            language = Model(
+                id = context.getString(R.string.smolvlm2_500M_language),
+                name = "SmolVLM",
+                size = 416_570_000L, // 1838.62 MB
+                isDefault = true
+            ),
+            vision = Model(
+                id = context.getString(R.string.smolvlm2_500M_vision),
+                name = "SmolVLM",
+                size = 103_740_000L, // 565.07 MB
+                isDefault = true
+            )
+        ),
+        MTMDModel(
+            name = "SmolVLM-2.2B-Instruct",
             language = Model(
                 id = context.getString(R.string.smolvlm2_2_2b_language),
                 name = "SmolVLM",
