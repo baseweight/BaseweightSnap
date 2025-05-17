@@ -75,6 +75,16 @@ private:
     void onGenerationComplete(JNIEnv* env, jobject callback);
     void onGenerationError(const std::string& error, JNIEnv* env, jobject callback);
 
+    // Custom eval chunks
+    int32_t evalChunksWithProgress(mtmd_context * ctx,
+                                struct llama_context * lctx,
+                                const mtmd_input_chunks * chunks,
+                                llama_pos n_past,
+                                llama_seq_id seq_id,
+                                int32_t n_batch,
+                                bool logits_last,
+                                llama_pos * new_n_past);
+
     // Vision context
     mtmd::context_ptr ctx_vision;
     
@@ -105,3 +115,5 @@ private:
     void clearCurrentCallback(JNIEnv* env);
     JNIEnv* getJNIEnv();
 };
+
+

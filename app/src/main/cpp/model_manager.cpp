@@ -5,6 +5,7 @@
 #include <android/log.h>
 #include <jni.h>
 #include <chrono>
+#include <omp.h>
 
 // Global flag to control generation
 std::atomic<bool> g_should_stop{false};
@@ -312,7 +313,8 @@ bool ModelManager::evalMessage(common_chat_msg& msg, bool add_bos) {
     }
 
     llama_pos new_n_past;
-    if (mtmd_helper_eval_chunks(ctx_vision.get(),
+    // This is our method, it sends progress updates, which is Android-specific
+    if (evalChunksWithProgress(ctx_vision.get(),
                                lctx,
                                chunks.ptr.get(),
                                n_past,
@@ -376,4 +378,80 @@ bool ModelManager::checkAntiprompt(const llama_tokens& generated_tokens) const {
         generated_tokens.end(),
         antiprompt_tokens.begin()
     );
+}
+
+/*
+ * Our platform-specific replacement for mtmd_helper_eval_chunks.
+ 
+ * This method is our custom eval chunks method, it sends progress updates, which is Android-specific, 
+ * and uses OpenMP for parallel processing, which the MTMD and llama.cpp libraries do not support on Android
+ * due to the lack of support for OpenMP in early Android NDK versions.
+ * 
+ * However, I don't have that problem, so I can use OpenMP to parallelize the evaluation of the chunks.
+ */
+
+int32_t ModelManager::evalChunksWithProgress(mtmd_context * ctx,
+                                struct llama_context * lctx,
+                                const mtmd_input_chunks * chunks,
+                                llama_pos n_past,
+                                llama_seq_id seq_id,
+                                int32_t n_batch,
+                                bool logits_last,
+                                llama_pos * new_n_past) {
+    size_t n_chunks = mtmd_input_chunks_size(chunks);
+    if (n_chunks == 0) {
+        LOGe("no chunks to eval\n");
+        return 0;
+    }
+
+    // Get JNIEnv for the current thread
+    JNIEnv* env = getJNIEnv();
+    if (env && currentCallback) {
+        onTextGenerated("PROGRESS:Analyzing image content...:35", env, currentCallback);
+    }
+
+    // Pre-encode all image chunks to avoid sequential processing
+    std::vector<float*> encoded_embeddings(n_chunks, nullptr);
+    #pragma omp parallel for
+    for (size_t i = 0; i < n_chunks; i++) {
+        auto chunk = mtmd_input_chunks_get(chunks, i);
+        if (mtmd_input_chunk_get_type(chunk) == MTMD_INPUT_CHUNK_TYPE_IMAGE) {
+            const auto image_tokens = mtmd_input_chunk_get_tokens_image(chunk);
+            if (image_tokens) {
+                mtmd_encode(ctx, image_tokens);
+                encoded_embeddings[i] = mtmd_get_output_embd(ctx);
+            }
+        }
+    }
+
+    if (env && currentCallback) {
+        onTextGenerated("PROGRESS:Generating description...:70", env, currentCallback);
+    }
+
+    // Process chunks sequentially but use pre-encoded embeddings
+    for (size_t i = 0; i < n_chunks; i++) {
+        bool chunk_logits_last = (i == n_chunks - 1) && logits_last;
+        auto chunk = mtmd_input_chunks_get(chunks, i);
+
+        if (mtmd_input_chunk_get_type(chunk) == MTMD_INPUT_CHUNK_TYPE_IMAGE && encoded_embeddings[i]) {
+            // Use pre-encoded embedding for image chunks
+            int32_t res = mtmd_helper_decode_image_chunk(ctx, lctx, chunk, encoded_embeddings[i], 
+                                                       n_past, seq_id, n_batch, &n_past);
+            if (res != 0) {
+                LOGe("failed to eval image chunk %zu\n", i);
+                return res;
+            }
+        } else {
+            // Process text chunks normally
+            int32_t res = mtmd_helper_eval_chunk_single(ctx, lctx, chunk, n_past, seq_id, 
+                                                      n_batch, chunk_logits_last, &n_past);
+            if (res != 0) {
+                LOGe("failed to eval chunk %zu\n", i);
+                return res;
+            }
+        }
+        *new_n_past = n_past;
+    }
+
+    return 0;
 }
