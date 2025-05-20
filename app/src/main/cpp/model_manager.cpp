@@ -1,6 +1,17 @@
+#include "common.h"
+#include "mtmd.h"
+#include "clip.h"
 #include "model_manager.h"
 #include <android/log.h>
 #include <jni.h>
+#include <chrono>
+#include <omp.h>
+
+// Global flag to control generation
+std::atomic<bool> g_should_stop{false};
+
+// Initialize static member
+JavaVM* ModelManager::javaVM = nullptr;
 
 #define TAG "model_manager.cpp"
 #define LOGi(...) __android_log_print(ANDROID_LOG_INFO, TAG, __VA_ARGS__)
@@ -70,7 +81,7 @@ bool ModelManager::loadLanguageModel(const char* model_path) {
     
     llama_model_params model_params = llama_model_default_params();
     // Let's try something here
-    model_params.n_gpu_layers = 32;
+    model_params.n_gpu_layers = gpu_layers;
     model = llama_model_load_from_file(model_path, model_params);
     if (!model) {
         LOGe("Failed to load language model from %s", model_path);
@@ -83,6 +94,7 @@ bool ModelManager::loadLanguageModel(const char* model_path) {
 bool ModelManager::loadVisionModel(const char* mmproj_path) {
     mtmd_context_params mparams = mtmd_context_params_default();
     mparams.use_gpu = true;  // Enable GPU by default
+
     mparams.print_timings = true;
     mparams.n_threads = 1;
     mparams.verbosity = GGML_LOG_LEVEL_INFO;
@@ -100,7 +112,7 @@ bool ModelManager::initializeContext() {
     ctx_params.n_ctx = 4096;  // Adjust based on your needs
     ctx_params.n_batch = n_batch;
     
-    lctx = llama_new_context_with_model(model, ctx_params);
+    lctx = llama_init_from_model(model, ctx_params);
     if (!lctx) {
         LOGe("Failed to create language context");
         return false;
@@ -141,7 +153,49 @@ void ModelManager::addBitmap(mtmd::bitmap&& bmp) {
     bitmaps.entries.push_back(std::move(bmp));
 }
 
+void ModelManager::setCurrentCallback(JNIEnv* env, jobject callback) {
+    // Store JavaVM pointer if not already stored
+    if (!javaVM) {
+        env->GetJavaVM(&javaVM);
+    }
+
+    if (currentCallback) {
+        env->DeleteGlobalRef(currentCallback);
+    }
+    currentCallback = env->NewGlobalRef(callback);
+}
+
+void ModelManager::clearCurrentCallback(JNIEnv* env) {
+    if (currentCallback) {
+        env->DeleteGlobalRef(currentCallback);
+        currentCallback = nullptr;
+    }
+}
+
+JNIEnv* ModelManager::getJNIEnv() {
+    if (!javaVM) {
+        return nullptr;
+    }
+
+    JNIEnv* env = nullptr;
+    jint result = javaVM->GetEnv((void**)&env, JNI_VERSION_1_6);
+    if (result == JNI_EDETACHED) {
+        // Thread is not attached to JVM, attach it
+        result = javaVM->AttachCurrentThread(&env, nullptr);
+        if (result != JNI_OK) {
+            LOGe("Failed to attach thread to JVM");
+            return nullptr;
+        }
+    } else if (result != JNI_OK) {
+        LOGe("Failed to get JNIEnv");
+        return nullptr;
+    }
+    return env;
+}
+
 void ModelManager::generateResponseAsync(const char* prompt, int max_tokens, JNIEnv* env, jobject callback) {
+    // Store the callback
+    setCurrentCallback(env, callback);
 
     // This ate up literal days of my life
     std::string str_prompt(prompt);
@@ -156,6 +210,7 @@ void ModelManager::generateResponseAsync(const char* prompt, int max_tokens, JNI
 
     if (!evalMessage(msg, true)) {  // Add BOS token for first message
         onGenerationError("Failed to evaluate message", env, callback);
+        clearCurrentCallback(env);
         return;
     }
 
@@ -163,13 +218,19 @@ void ModelManager::generateResponseAsync(const char* prompt, int max_tokens, JNI
     int n_predict = max_tokens;
 
     for (int i = 0; i < n_predict; i++) {
+        // Check if we should stop
+        if (g_should_stop) {
+            onGenerationComplete(env, callback);
+            break;
+        }
+
         llama_token token_id = common_sampler_sample(sampler, lctx, -1);
         generated_tokens.push_back(token_id);
         common_sampler_accept(sampler, token_id, true);
 
         if (llama_vocab_is_eog(vocab, token_id) || checkAntiprompt(generated_tokens)) {
             onGenerationComplete(env, callback);
-            return;
+            break;
         }
 
         // Convert token to text
@@ -181,9 +242,14 @@ void ModelManager::generateResponseAsync(const char* prompt, int max_tokens, JNI
         // Check if we've generated enough tokens
         if (i >= n_predict - 1) {
             onGenerationComplete(env, callback);
-            return;
+            break;
         }
 
+        // Check again before decoding
+        if (g_should_stop) {
+            onGenerationComplete(env, callback);
+            break;
+        }
 
         // Evaluate the token
         common_batch_clear(batch);
@@ -191,10 +257,12 @@ void ModelManager::generateResponseAsync(const char* prompt, int max_tokens, JNI
         if (llama_decode(lctx, batch)) {
             LOGe("failed to decode token");
             onGenerationError("Failed to decode token", env, callback);
-            return;
+            break;
         }
     }
 
+    // Clean up the callback at the end
+    clearCurrentCallback(env);
 }
 
 bool ModelManager::evalMessage(common_chat_msg& msg, bool add_bos) {
@@ -202,7 +270,6 @@ bool ModelManager::evalMessage(common_chat_msg& msg, bool add_bos) {
         LOGe("Chat templates not initialized");
         return false;
     }
-
 
     // Format chat message using templates
     common_chat_templates_inputs tmpl_inputs;
@@ -218,20 +285,36 @@ bool ModelManager::evalMessage(common_chat_msg& msg, bool add_bos) {
     text.parse_special = true;
 
     mtmd::input_chunks chunks(mtmd_input_chunks_init());
-    auto& bitmaps = getBitmaps();  // Use non-const reference since c_ptr() isn't const
+    auto& bitmaps = getBitmaps();
     auto bitmaps_c_ptr = bitmaps.c_ptr();
+
+    // Get JNIEnv for the current thread
+    JNIEnv* env = getJNIEnv();
+    
+    // Send progress update for tokenization
+    if (env && currentCallback) {
+        onTextGenerated("PROGRESS:Tokenizing input...:10", env, currentCallback);
+    }
+    
     int32_t res = mtmd_tokenize(ctx_vision.get(),
                                chunks.ptr.get(),
                                &text,
                                bitmaps_c_ptr.data(),
                                bitmaps_c_ptr.size());
+
     if (res != 0) {
         LOGe("Unable to tokenize prompt, res = %d", res);
         return false;
     }
 
+    // Send progress update for evaluation
+    if (env && currentCallback) {
+        onTextGenerated("PROGRESS:Evaluating chunks...:30", env, currentCallback);
+    }
+
     llama_pos new_n_past;
-    if (mtmd_helper_eval_chunks(ctx_vision.get(),
+    // This is our method, it sends progress updates, which is Android-specific
+    if (evalChunksWithProgress(ctx_vision.get(),
                                lctx,
                                chunks.ptr.get(),
                                n_past,
@@ -243,9 +326,14 @@ bool ModelManager::evalMessage(common_chat_msg& msg, bool add_bos) {
         return false;
     }
 
+    // Send progress update for completion
+    if (env && currentCallback) {
+        onTextGenerated("PROGRESS:Processing complete:100", env, currentCallback);
+    }
+
     n_past = new_n_past;
-    
-    // Clear bitmaps only after successful evaluation
+
+    // Live dangerously
     bitmaps.entries.clear();
     return true;
 }
@@ -290,4 +378,80 @@ bool ModelManager::checkAntiprompt(const llama_tokens& generated_tokens) const {
         generated_tokens.end(),
         antiprompt_tokens.begin()
     );
+}
+
+/*
+ * Our platform-specific replacement for mtmd_helper_eval_chunks.
+ 
+ * This method is our custom eval chunks method, it sends progress updates, which is Android-specific, 
+ * and uses OpenMP for parallel processing, which the MTMD and llama.cpp libraries do not support on Android
+ * due to the lack of support for OpenMP in early Android NDK versions.
+ * 
+ * However, I don't have that problem, so I can use OpenMP to parallelize the evaluation of the chunks.
+ */
+
+int32_t ModelManager::evalChunksWithProgress(mtmd_context * ctx,
+                                struct llama_context * lctx,
+                                const mtmd_input_chunks * chunks,
+                                llama_pos n_past,
+                                llama_seq_id seq_id,
+                                int32_t n_batch,
+                                bool logits_last,
+                                llama_pos * new_n_past) {
+    size_t n_chunks = mtmd_input_chunks_size(chunks);
+    if (n_chunks == 0) {
+        LOGe("no chunks to eval\n");
+        return 0;
+    }
+
+    // Get JNIEnv for the current thread
+    JNIEnv* env = getJNIEnv();
+    if (env && currentCallback) {
+        onTextGenerated("PROGRESS:Analyzing image content...:35", env, currentCallback);
+    }
+
+    // Pre-encode all image chunks to avoid sequential processing
+    std::vector<float*> encoded_embeddings(n_chunks, nullptr);
+    #pragma omp parallel for
+    for (size_t i = 0; i < n_chunks; i++) {
+        auto chunk = mtmd_input_chunks_get(chunks, i);
+        if (mtmd_input_chunk_get_type(chunk) == MTMD_INPUT_CHUNK_TYPE_IMAGE) {
+            const auto image_tokens = mtmd_input_chunk_get_tokens_image(chunk);
+            if (image_tokens) {
+                mtmd_encode(ctx, image_tokens);
+                encoded_embeddings[i] = mtmd_get_output_embd(ctx);
+            }
+        }
+    }
+
+    if (env && currentCallback) {
+        onTextGenerated("PROGRESS:Generating description...:70", env, currentCallback);
+    }
+
+    // Process chunks sequentially but use pre-encoded embeddings
+    for (size_t i = 0; i < n_chunks; i++) {
+        bool chunk_logits_last = (i == n_chunks - 1) && logits_last;
+        auto chunk = mtmd_input_chunks_get(chunks, i);
+
+        if (mtmd_input_chunk_get_type(chunk) == MTMD_INPUT_CHUNK_TYPE_IMAGE && encoded_embeddings[i]) {
+            // Use pre-encoded embedding for image chunks
+            int32_t res = mtmd_helper_decode_image_chunk(ctx, lctx, chunk, encoded_embeddings[i], 
+                                                       n_past, seq_id, n_batch, &n_past);
+            if (res != 0) {
+                LOGe("failed to eval image chunk %zu\n", i);
+                return res;
+            }
+        } else {
+            // Process text chunks normally
+            int32_t res = mtmd_helper_eval_chunk_single(ctx, lctx, chunk, n_past, seq_id, 
+                                                      n_batch, chunk_logits_last, &n_past);
+            if (res != 0) {
+                LOGe("failed to eval chunk %zu\n", i);
+                return res;
+            }
+        }
+        *new_n_past = n_past;
+    }
+
+    return 0;
 }

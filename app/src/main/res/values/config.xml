@@ -10,4 +10,6 @@
     <string name="smolvlm2_500M_vision">6a1726de-7036-4b0d-884f-49df475e04f8</string>
     <string name="smolvlm_500M_language">e3e8315b-99cd-4ae5-8cc9-c8738ae8aa1e</string>
     <string name="smolvlm_500M_vision">8ccd519a-620a-4a1d-98ba-a9712a95a1b4</string>
+    <string name="smolvlm2_256M_language">d3b4bed3-e386-4472-9fdc-13c2b54fefbc</string>
+    <string name="smolvlm2_256M_vision">f4eb7fcc-bdfb-4d17-8e96-0ef38dc52a77</string>
 </resources> 

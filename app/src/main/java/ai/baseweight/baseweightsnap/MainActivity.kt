@@ -25,6 +25,7 @@ import ai.baseweight.baseweightsnap.databinding.ActivityMainBinding
 import android.util.Log
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
@@ -33,6 +34,14 @@ import java.text.SimpleDateFormat
 import java.util.Locale
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
+import android.app.AlertDialog
+import android.widget.ProgressBar
+import android.widget.TextView
+import android.widget.Button
+import android.text.Spannable
+import android.text.SpannableString
+import android.text.style.ClickableSpan
+import android.text.method.LinkMovementMethod
 
 class MainActivity : AppCompatActivity() {
     private lateinit var binding: ActivityMainBinding
@@ -42,7 +51,7 @@ class MainActivity : AppCompatActivity() {
     private var latestImageUri: Uri? = null
     private var currentCameraSelector = CameraSelector.DEFAULT_BACK_CAMERA
     private val scope = CoroutineScope(Dispatchers.Main)
-
+    private var generationJob: Job? = null
     private val vlmRunner: MTMD_Android = MTMD_Android.instance()
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -63,6 +72,9 @@ class MainActivity : AppCompatActivity() {
         
         binding = ActivityMainBinding.inflate(layoutInflater)
         setContentView(binding.root)
+
+        // Show instructions dialog
+        showInstructionsDialog()
 
         // Setup button click listeners
         binding.btnCapture.setOnClickListener { captureImage() }
@@ -213,7 +225,15 @@ class MainActivity : AppCompatActivity() {
         binding.btnDismissResponse.visibility = View.VISIBLE
     }
 
+
+    private fun stopGeneration() {
+        generationJob?.cancel()
+        vlmRunner.stopGeneration()
+    }
+
     private fun hideResponseText() {
+        stopGeneration()
+        binding.responseText.text = ""  // Clear the text
         binding.responseText.visibility = View.GONE
         binding.btnDismissResponse.visibility = View.GONE
     }
@@ -314,34 +334,60 @@ class MainActivity : AppCompatActivity() {
             return
         }
 
-        showResponseText("Processing image...")
-        val textView = binding.responseText
-        textView.visibility = View.VISIBLE  // Ensure it's visible
+        // Create progress dialog
+        val progressDialog = AlertDialog.Builder(this).apply {
+            setTitle("Processing Image")
+            setView(R.layout.dialog_progress)
+            setCancelable(false)
+        }.create()
 
-        vlmRunner.processImage(bitmap)
+        // Show progress dialog before starting processing
+        progressDialog.show()
 
-        textView.text = "Generating description..."
+        // Get progress views
+        val progressBar = progressDialog.findViewById<ProgressBar>(R.id.progressBar)
+        val progressText = progressDialog.findViewById<TextView>(R.id.progressText)
+
+        // Hide text view initially
+        binding.responseText.visibility = View.GONE
+        binding.btnDismissResponse.visibility = View.GONE
 
         try {
+            vlmRunner.processImage(bitmap)
+
             Log.d("MainActivity", "Generating response for prompt: $prompt")
-            scope.launch {
+            generationJob = scope.launch {
                 vlmRunner.generateResponse(prompt, 2048).collect { text ->
                     Log.d("MainActivity", "Received text: $text")
                     withContext(Dispatchers.Main) {
-                        Log.d("MainActivity", "Generated text: $text")
-                        if(textView.text == "Generating description...") {
-                            textView.text = text
+                        if (text.startsWith("PROGRESS:")) {
+                            // Handle progress update
+                            val parts = text.substring(9).split(":")
+                            if (parts.size == 2) {
+                                val (phase, progress) = parts
+                                progressText?.text = phase
+                                progressBar?.progress = progress.toInt()
+                            }
                         } else {
-                            textView.append(text)
+                            // Handle generated text
+                            Log.d("MainActivity", "Generated text: $text")
+                            // Show text view and dismiss dialog when we get actual text
+                            progressDialog.dismiss()
+                            binding.responseText.visibility = View.VISIBLE
+                            binding.btnDismissResponse.visibility = View.VISIBLE
+                            if(binding.responseText.text.isEmpty()) {
+                                binding.responseText.text = text
+                            } else {
+                                binding.responseText.append(text)
+                            }
+                            binding.responseText.invalidate()
                         }
-                        // Force layout update
-                        textView.invalidate()
                     }
                 }
             }
-        }
-        catch (e: Exception) {
+        } catch (e: Exception) {
             Log.e("MainActivity", "Error generating response", e)
+            progressDialog.dismiss()
             showResponseText("Error generating response: ${e.message}")
         }
     }
@@ -389,7 +435,36 @@ class MainActivity : AppCompatActivity() {
 
     override fun onDestroy() {
         super.onDestroy()
+        stopGeneration()  // Stop any ongoing generation
         cameraExecutor.shutdown()
+    }
+
+    private fun showInstructionsDialog() {
+        val dialog = AlertDialog.Builder(this).apply {
+            setView(R.layout.dialog_instructions)
+            setCancelable(false)
+        }.create()
+
+        dialog.show()
+
+        // Set the button click listener after showing the dialog
+        dialog.findViewById<Button>(R.id.btnGotIt)?.setOnClickListener {
+            dialog.dismiss()
+        }
+
+        // Set up the clickable link
+        dialog.findViewById<TextView>(R.id.copyrightText)?.let { textView ->
+            val spannableString = SpannableString("© 2024 Baseweight Snap. Visit us at baseweight.ai")
+            val clickableSpan = object : ClickableSpan() {
+                override fun onClick(widget: View) {
+                    val intent = Intent(Intent.ACTION_VIEW, Uri.parse("https://baseweight.ai"))
+                    startActivity(intent)
+                }
+            }
+            spannableString.setSpan(clickableSpan, spannableString.length - 13, spannableString.length, Spannable.SPAN_EXCLUSIVE_EXCLUSIVE)
+            textView.text = spannableString
+            textView.movementMethod = LinkMovementMethod.getInstance()
+        }
     }
 
     companion object {

@@ -15,6 +15,9 @@
 #define LOGi(...) __android_log_print(ANDROID_LOG_INFO, TAG, __VA_ARGS__)
 #define LOGe(...) __android_log_print(ANDROID_LOG_ERROR, TAG, __VA_ARGS__)
 
+// Global flag to control generation
+extern std::atomic<bool> g_should_stop;
+
 class ModelManager {
 public:
     // Delete copy constructor and assignment operator
@@ -72,6 +75,16 @@ private:
     void onGenerationComplete(JNIEnv* env, jobject callback);
     void onGenerationError(const std::string& error, JNIEnv* env, jobject callback);
 
+    // Custom eval chunks
+    int32_t evalChunksWithProgress(mtmd_context * ctx,
+                                struct llama_context * lctx,
+                                const mtmd_input_chunks * chunks,
+                                llama_pos n_past,
+                                llama_seq_id seq_id,
+                                int32_t n_batch,
+                                bool logits_last,
+                                llama_pos * new_n_past);
+
     // Vision context
     mtmd::context_ptr ctx_vision;
     
@@ -80,8 +93,9 @@ private:
     llama_context* lctx = nullptr;
     const llama_vocab* vocab = nullptr;
     llama_batch batch;
-    int n_batch = 512;  // Default to a larger batch size for better performance
+    int n_batch = 1024;  // Default to a larger batch size for better performance
     llama_pos n_past = 0;
+    int gpu_layers = 512;
     
     // Sampler
     common_sampler* sampler = nullptr;
@@ -93,4 +107,13 @@ private:
     common_chat_templates_ptr tmpls;
     llama_tokens antiprompt_tokens;
     bool checkAntiprompt(const llama_tokens& generated_tokens) const;
+
+    // Callback handling
+    jobject currentCallback = nullptr;
+    static JavaVM* javaVM;
+    void setCurrentCallback(JNIEnv* env, jobject callback);
+    void clearCurrentCallback(JNIEnv* env);
+    JNIEnv* getJNIEnv();
 };
+
+
