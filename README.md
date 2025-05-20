@@ -5,7 +5,7 @@ The goal of this application is to show that it's possible to run Multimodal mod
 
 ## Features
 
-- Real-time object detection and weight estimation using ONNX Runtime
+- Real-time object detection and weight estimation using llama.cpp and libmtmd
 - Camera integration using CameraX
 - Native C++ processing for optimal performance
 - Support for arm64-v8a 
