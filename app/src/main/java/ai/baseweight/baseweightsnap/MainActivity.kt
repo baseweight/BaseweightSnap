@@ -37,6 +37,11 @@ import java.util.concurrent.Executors
 import android.app.AlertDialog
 import android.widget.ProgressBar
 import android.widget.TextView
+import android.widget.Button
+import android.text.Spannable
+import android.text.SpannableString
+import android.text.style.ClickableSpan
+import android.text.method.LinkMovementMethod
 
 class MainActivity : AppCompatActivity() {
     private lateinit var binding: ActivityMainBinding
@@ -67,6 +72,9 @@ class MainActivity : AppCompatActivity() {
         
         binding = ActivityMainBinding.inflate(layoutInflater)
         setContentView(binding.root)
+
+        // Show instructions dialog
+        showInstructionsDialog()
 
         // Setup button click listeners
         binding.btnCapture.setOnClickListener { captureImage() }
@@ -216,6 +224,7 @@ class MainActivity : AppCompatActivity() {
         binding.responseText.visibility = View.VISIBLE
         binding.btnDismissResponse.visibility = View.VISIBLE
     }
+
 
     private fun stopGeneration() {
         generationJob?.cancel()
@@ -428,6 +437,34 @@ class MainActivity : AppCompatActivity() {
         super.onDestroy()
         stopGeneration()  // Stop any ongoing generation
         cameraExecutor.shutdown()
+    }
+
+    private fun showInstructionsDialog() {
+        val dialog = AlertDialog.Builder(this).apply {
+            setView(R.layout.dialog_instructions)
+            setCancelable(false)
+        }.create()
+
+        dialog.show()
+
+        // Set the button click listener after showing the dialog
+        dialog.findViewById<Button>(R.id.btnGotIt)?.setOnClickListener {
+            dialog.dismiss()
+        }
+
+        // Set up the clickable link
+        dialog.findViewById<TextView>(R.id.copyrightText)?.let { textView ->
+            val spannableString = SpannableString("© 2024 Baseweight Snap. Visit us at baseweight.ai")
+            val clickableSpan = object : ClickableSpan() {
+                override fun onClick(widget: View) {
+                    val intent = Intent(Intent.ACTION_VIEW, Uri.parse("https://baseweight.ai"))
+                    startActivity(intent)
+                }
+            }
+            spannableString.setSpan(clickableSpan, spannableString.length - 13, spannableString.length, Spannable.SPAN_EXCLUSIVE_EXCLUSIVE)
+            textView.text = spannableString
+            textView.movementMethod = LinkMovementMethod.getInstance()
+        }
     }
 
     companion object {
