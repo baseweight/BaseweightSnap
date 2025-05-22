@@ -17,9 +17,29 @@ if(${CMAKE_ANDROID_ARCH_ABI} STREQUAL "arm64-v8a")
     set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -march=armv8.4a+dotprod")
 endif()
 
+
 set(LLAMA_CURL OFF)
-#set(GGML_OPENCL ON)
-set(GGML_VULKAN ON)
+set(GGML_OPENCL ON)
+#set(GGML_VULKAN ON)
+
+# Add OpenCL search paths for Android NDK
+set(OpenCL_INCLUDE_DIR "${ANDROID_NDK}/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/include")
+
+# Set OpenCL library path based on architecture
+if(${CMAKE_ANDROID_ARCH_ABI} STREQUAL "arm64-v8a")
+    set(OpenCL_LIBRARY "${ANDROID_NDK}/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/lib/aarch64-linux-android/libOpenCL.so")
+elseif(${CMAKE_ANDROID_ARCH_ABI} STREQUAL "x86_64")
+    set(OpenCL_LIBRARY "${ANDROID_NDK}/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/lib/x86_64-linux-android/libOpenCL.so")
+endif()
+
+# Create symbolic link for arm64-linux-android if it doesn't exist
+if(${CMAKE_ANDROID_ARCH_ABI} STREQUAL "arm64-v8a" AND NOT EXISTS "${ANDROID_NDK}/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/lib/arm64-linux-android/libOpenCL.so")
+    execute_process(
+        COMMAND mkdir -p "${ANDROID_NDK}/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/lib/arm64-linux-android"
+        COMMAND ln -sf "${OpenCL_LIBRARY}" "${ANDROID_NDK}/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/lib/arm64-linux-android/libOpenCL.so"
+        WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+    )
+endif()
 
 #load local llama.cpp
 add_subdirectory(llama.cpp build-llama)
@@ -37,6 +57,13 @@ target_include_directories(${CMAKE_PROJECT_NAME} PUBLIC
         ${CMAKE_CURRENT_SOURCE_DIR}/llama.cpp/tools/mtmd
         ${CMAKE_CURRENT_SOURCE_DIR}/llama.cpp/src
         ${CMAKE_CURRENT_SOURCE_DIR}/llama.cpp/ggml/src)
+
+# Copy OpenCL library to the output directory
+add_custom_command(TARGET ${CMAKE_PROJECT_NAME} POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy
+        "${OpenCL_LIBRARY}"
+        "${CMAKE_LIBRARY_OUTPUT_DIRECTORY}/libOpenCL.so"
+)
 
 # Specifies libraries CMake should link to your target library. You
 # can link libraries from various origins, such as libraries defined in this

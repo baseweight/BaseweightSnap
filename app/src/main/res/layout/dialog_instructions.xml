@@ -43,7 +43,7 @@
     <TextView
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:text="Powered by:"
+        android:text="Powered by:• llama.cpp - Copyright (c) 2025 ggml.ai (MIT)\n• SmolVLM2 - Copyright (c) 2025 HuggingFace Inc. (Apache 2.0)"
         android:textSize="12sp"
         android:textStyle="italic"
         android:textColor="@color/black"
@@ -52,11 +52,7 @@
     <TextView
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-<<<<<<< HEAD
-        android:text="• llama.cpp - Copyright (c) 2025 ggml.ai (MIT)\n• SmolVLM2 - Copyright (c) 2024 HuggingFace Inc. (Apache 2.0)"
-=======
-        android:text="• llama.cpp - Copyright (c) 2025 ggml.ai (MIT)\n• SmolVLM2 - Copyright (c) 2025 HuggingFace Inc. (Apache 2.0)"
->>>>>>> 08fb626 (This didn't make the PR?)
+        android:text=""
         android:textSize="11sp"
         android:textColor="@color/black"
         android:layout_marginBottom="16dp"/>

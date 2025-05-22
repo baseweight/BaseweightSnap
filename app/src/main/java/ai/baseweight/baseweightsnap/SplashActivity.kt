@@ -160,6 +160,7 @@ class SplashActivity : AppCompatActivity() {
                 // Verify files exist before loading
                 if (!File(modelPath).exists() || !File(visionPath).exists()) {
                     Log.e(TAG, "Model files not found: $modelPath or $visionPath")
+                    showErrorAndExit("Model files not found. Please try reinstalling the app.")
                     return@withContext false
                 }
                 
@@ -168,11 +169,13 @@ class SplashActivity : AppCompatActivity() {
                 
                 if (!success) {
                     Log.e(TAG, "Failed to load models from: $modelPath and $visionPath")
+                    showErrorAndExit("Failed to load models. Please try reinstalling the app.")
                 }
                 
                 success
             } catch (e: Exception) {
                 Log.e(TAG, "Error loading models: ${e.message}", e)
+                showErrorAndExit("Error loading models: ${e.message ?: DEFAULT_ERROR_MESSAGE}")
                 false
             }
         }
