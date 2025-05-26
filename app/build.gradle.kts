@@ -11,8 +11,8 @@ android {
         applicationId = "ai.baseweight.baseweightsnap"
         minSdk = 28
         targetSdk = 35
-        versionCode = 2
-        versionName = "1.0.0"
+        versionCode = 3
+        versionName = "1.1.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
@@ -58,9 +58,6 @@ android {
 }
 
 dependencies {
-
-    // ONNX Runtime
-    implementation(libs.onnxruntime.android)
 
     // CameraX
     implementation(libs.androidx.camera.core)
