@@ -5,7 +5,6 @@
 #include <android/log.h>
 #include <jni.h>
 #include <chrono>
-#include <omp.h>
 
 // Global flag to control generation
 std::atomic<bool> g_should_stop{false};
@@ -410,47 +409,23 @@ int32_t ModelManager::evalChunksWithProgress(mtmd_context * ctx,
         onTextGenerated("PROGRESS:Analyzing image content...:35", env, currentCallback);
     }
 
-    // Pre-encode all image chunks to avoid sequential processing
-    std::vector<float*> encoded_embeddings(n_chunks, nullptr);
-    #pragma omp parallel for
-    for (size_t i = 0; i < n_chunks; i++) {
-        auto chunk = mtmd_input_chunks_get(chunks, i);
-        if (mtmd_input_chunk_get_type(chunk) == MTMD_INPUT_CHUNK_TYPE_IMAGE) {
-            const auto image_tokens = mtmd_input_chunk_get_tokens_image(chunk);
-            if (image_tokens) {
-                mtmd_encode(ctx, image_tokens);
-                encoded_embeddings[i] = mtmd_get_output_embd(ctx);
-            }
-        }
-    }
-
-    if (env && currentCallback) {
-        onTextGenerated("PROGRESS:Generating description...:70", env, currentCallback);
-    }
-
-    // Process chunks sequentially but use pre-encoded embeddings
+    // Process chunks sequentially
     for (size_t i = 0; i < n_chunks; i++) {
         bool chunk_logits_last = (i == n_chunks - 1) && logits_last;
         auto chunk = mtmd_input_chunks_get(chunks, i);
 
-        if (mtmd_input_chunk_get_type(chunk) == MTMD_INPUT_CHUNK_TYPE_IMAGE && encoded_embeddings[i]) {
-            // Use pre-encoded embedding for image chunks
-            int32_t res = mtmd_helper_decode_image_chunk(ctx, lctx, chunk, encoded_embeddings[i], 
-                                                       n_past, seq_id, n_batch, &n_past);
-            if (res != 0) {
-                LOGe("failed to eval image chunk %zu\n", i);
-                return res;
-            }
-        } else {
-            // Process text chunks normally
-            int32_t res = mtmd_helper_eval_chunk_single(ctx, lctx, chunk, n_past, seq_id, 
-                                                      n_batch, chunk_logits_last, &n_past);
-            if (res != 0) {
-                LOGe("failed to eval chunk %zu\n", i);
-                return res;
-            }
+        int32_t res = mtmd_helper_eval_chunk_single(ctx, lctx, chunk, n_past, seq_id, 
+                                                  n_batch, chunk_logits_last, &n_past);
+        if (res != 0) {
+            LOGe("failed to eval chunk %zu\n", i);
+            return res;
         }
         *new_n_past = n_past;
+
+    }
+
+    if (env && currentCallback) {
+        onTextGenerated("PROGRESS:Generating description...:70", env, currentCallback);
     }
 
     return 0;
