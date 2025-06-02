@@ -7,8 +7,6 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOn
-import kotlinx.coroutines.flow.onEach
-import org.json.JSONObject
 import java.io.File
 import java.io.FileOutputStream
 import java.net.HttpURLConnection
@@ -48,60 +46,31 @@ class ModelManager(private val context: Context) {
 
     companion object {
         private const val TAG = "ModelManager"
-        private const val BASE_URL = "https://api.baseweight.ai/api"
         private const val MODELS_DIR = "models"
         const val DEFAULT_MODEL_NAME = "SmolVLM2-256M-VidInstruct"
+        
+        // HuggingFace URLs for the models
+        private const val LANGUAGE_MODEL_URL = "https://huggingface.co/ggml-org/SmolVLM2-256M-Video-Instruct-GGUF/resolve/main/SmolVLM2-256M-Video-Instruct-Q8_0.gguf"
+        private const val VISION_MODEL_URL = "https://huggingface.co/ggml-org/SmolVLM2-256M-Video-Instruct-GGUF/resolve/main/mmproj-SmolVLM2-256M-Video-Instruct-Q8_0.gguf"
     }
 
-    private val apiKey: String by lazy {
-        context.getString(R.string.baseweight_api_key)
-    }
-
-    // List of available models - we'll hardcode IDs and names but fetch actual details from the API
+    // List of available models - simplified to just one model pair
     val availableModels = listOf(
         MTMDModel(
             name = DEFAULT_MODEL_NAME,
             language = Model(
-                id = context.getString(R.string.smolvlm2_256M_language),
+                id = "smolvlm2-256m-language",
                 name = "SmolVLM",
-                size = 416_570_000L, // 1838.62 MB
-                isDefault = true
+                size = 175_000_000L, // Approximate size in bytes
+                isDefault = true,
+                isLanguage = true
             ),
             vision = Model(
-                id = context.getString(R.string.smolvlm2_256M_vision),
+                id = "smolvlm2-256m-vision",
                 name = "SmolVLM",
-                size = 103_740_000L, // 565.07 MB
-                isDefault = true
-            )
-        ),
-        MTMDModel(
-            name = "SmolVLM2-500M-VidInstruct",
-            language = Model(
-                id = context.getString(R.string.smolvlm2_500M_language),
-                name = "SmolVLM",
-                size = 416_570_000L, // 1838.62 MB
-                isDefault = true
-            ),
-            vision = Model(
-                id = context.getString(R.string.smolvlm2_500M_vision),
-                name = "SmolVLM",
-                size = 103_740_000L, // 565.07 MB
-                isDefault = true
-            )
-        ),
-        MTMDModel(
-            name = "SmolVLM-2.2B-Instruct",
-            language = Model(
-                id = context.getString(R.string.smolvlm2_2_2b_language),
-                name = "SmolVLM",
-                size = 1_838_620_000L, // 1838.62 MB
-                isDefault = true
-            ),
-            vision = Model(
-                id = context.getString(R.string.smolvlm2_2_2b_vision),
-                name = "SmolVLM",
-                size = 565_070_000L, // 565.07 MB
-                isDefault = true
+                size = 104_000_000L, // Approximate size in bytes
+                isDefault = true,
+                isLanguage = false
             )
         )
     )
@@ -112,7 +81,6 @@ class ModelManager(private val context: Context) {
     }
 
     private fun getModelsDirectory(): File {
-        // Use external storage directory
         return File(context.getExternalFilesDir(null), MODELS_DIR)
     }
 
@@ -124,7 +92,7 @@ class ModelManager(private val context: Context) {
     // Get model by ID
     fun getModel(modelId: String): Model? {
         return availableModels
-            .flatMap { listOf(it.language.copy(isLanguage = true), it.vision.copy(isLanguage = false)) }
+            .flatMap { listOf(it.language, it.vision) }
             .find { it.id == modelId }
     }
 
@@ -153,12 +121,12 @@ class ModelManager(private val context: Context) {
         val mtmdModel = getMTMDModel(modelName) ?: throw IllegalArgumentException("Invalid model name: $modelName")
         
         // Download language model first
-        downloadModel(mtmdModel.languageId).collect { progress ->
+        downloadModel(mtmdModel.languageId, LANGUAGE_MODEL_URL).collect { progress ->
             // Progress is already emitted by downloadModel
         }
         
         // Download vision model
-        downloadModel(mtmdModel.visionId).collect { progress ->
+        downloadModel(mtmdModel.visionId, VISION_MODEL_URL).collect { progress ->
             // Progress is already emitted by downloadModel
         }
         
@@ -195,8 +163,8 @@ class ModelManager(private val context: Context) {
         }
     }.flowOn(Dispatchers.IO)
 
-    // Download a single model (helper for backward compatibility)
-    private fun downloadModel(modelId: String): Flow<DownloadProgress> = flow {
+    // Download a single model
+    private fun downloadModel(modelId: String, downloadUrl: String): Flow<DownloadProgress> = flow {
         val model = getModel(modelId) ?: throw IllegalArgumentException("Invalid model ID")
         val modelFile = File(getModelPath(model))
         
@@ -204,40 +172,11 @@ class ModelManager(private val context: Context) {
         modelFile.parentFile?.mkdirs()
 
         try {
-            emit(DownloadProgress(0, 0, model.size, DownloadStatus.PENDING, "Requesting download URL..."))
-            
-            // Step 1: Get the pre-signed URL from the API
-            val apiUrl = "$BASE_URL/models/$modelId/download"
-            Log.d(TAG, "Requesting download URL from: $apiUrl")
-            
-            val apiConnection = URL(apiUrl).openConnection() as HttpURLConnection
-            apiConnection.setRequestProperty("Authorization", "Bearer $apiKey")
-            apiConnection.connect()
-            
-            // Check if we got a successful response from the API
-            if (apiConnection.responseCode != HttpURLConnection.HTTP_OK) {
-                val errorMessage = apiConnection.errorStream?.bufferedReader()?.use { it.readText() } ?: "Unknown error"
-                Log.e(TAG, "API Error: ${apiConnection.responseCode} - $errorMessage")
-                throw Exception("API Error: ${apiConnection.responseCode} - $errorMessage")
-            }
-            
-            // Parse the response to get the pre-signed URL
-            val responseText = apiConnection.inputStream.bufferedReader().use { it.readText() }
-            Log.d(TAG, "API Response: $responseText")
-            
-            val jsonResponse = JSONObject(responseText)
-            
-            // Extract the pre-signed URL matching the Python script's field name
-            val preSignedUrl = jsonResponse.getString("download_url")
-            Log.d(TAG, "Got pre-signed download URL: $preSignedUrl")
-            
             emit(DownloadProgress(0, 0, model.size, DownloadStatus.PENDING, "Connecting to download server..."))
             
-            // Step 2: Download the file using the pre-signed URL
-            val downloadConnection = URL(preSignedUrl).openConnection() as HttpURLConnection
+            val downloadConnection = URL(downloadUrl).openConnection() as HttpURLConnection
             downloadConnection.connect()
             
-            // Check HTTP status code and get detailed error information
             val statusCode = downloadConnection.responseCode
             if (statusCode != HttpURLConnection.HTTP_OK) {
                 val errorStream = downloadConnection.errorStream
@@ -245,7 +184,6 @@ class ModelManager(private val context: Context) {
                 val errorDetails = "HTTP ${statusCode} - ${downloadConnection.responseMessage}\n${errorMessage}"
                 Log.e(TAG, "Download Error: $errorDetails")
                 
-                // Emit error progress before throwing exception
                 emit(DownloadProgress(
                     progress = 0,
                     bytesDownloaded = 0,
@@ -262,7 +200,7 @@ class ModelManager(private val context: Context) {
                 Log.e(TAG, "Invalid content length received: $totalSize")
                 throw Exception("Invalid content length received from server")
             }
-            Log.d(TAG, "Download size from S3: $totalSize bytes")
+            Log.d(TAG, "Download size: $totalSize bytes")
             
             val inputStream = downloadConnection.inputStream
             val outputStream = FileOutputStream(modelFile)
@@ -272,7 +210,6 @@ class ModelManager(private val context: Context) {
             
             emit(DownloadProgress(0, 0, totalSize, DownloadStatus.DOWNLOADING))
             
-            // Download the file in chunks
             while (true) {
                 bytesRead = inputStream.read(buffer)
                 if (bytesRead == -1) break
@@ -284,16 +221,14 @@ class ModelManager(private val context: Context) {
                 emit(DownloadProgress(progress, downloadedSize, totalSize, DownloadStatus.DOWNLOADING))
             }
             
-            // Ensure the file is completely written before closing
             outputStream.flush()
             outputStream.close()
             inputStream.close()
             
-            // Verify the file size matches what we expected
             val finalFileSize = modelFile.length()
             if (finalFileSize != totalSize) {
                 Log.e(TAG, "Downloaded file size mismatch: Expected $totalSize, got $finalFileSize")
-                modelFile.delete() // Delete the corrupted file
+                modelFile.delete()
                 throw Exception("Download failed: File size mismatch")
             }
             
@@ -303,7 +238,7 @@ class ModelManager(private val context: Context) {
             Log.e(TAG, "Error downloading model: ${e.message}", e)
             emit(DownloadProgress(0, 0, model.size, DownloadStatus.ERROR, e.message ?: "Unknown error"))
             if (modelFile.exists()) {
-                modelFile.delete() // Delete partial file
+                modelFile.delete()
             }
         }
     }.flowOn(Dispatchers.IO)
