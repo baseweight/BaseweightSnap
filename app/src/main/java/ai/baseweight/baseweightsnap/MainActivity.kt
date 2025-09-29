@@ -52,7 +52,7 @@ class MainActivity : AppCompatActivity() {
     private var currentCameraSelector = CameraSelector.DEFAULT_BACK_CAMERA
     private val scope = CoroutineScope(Dispatchers.Main)
     private var generationJob: Job? = null
-    private val vlmRunner: MTMD_Android = MTMD_Android.instance()
+    private val vlmRunner: SmolVLMAndroid = SmolVLMAndroid.instance()
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -475,7 +475,7 @@ class MainActivity : AppCompatActivity() {
 
         // Used to load the 'baseweightsnap' library on application startup.
         init {
-            System.loadLibrary("baseweightsnap")
+            System.loadLibrary("smolvlm_snap")
         }
     }
 }

@@ -1,0 +1,19 @@
+[package]
+name = "smolvlm_rs_lib"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+ort = "=2.0.0-rc.10"
+image = "0.24"
+anyhow = "1.0"
+ndarray = "0.16.1"
+jni = "0.20.0"
+tokenizers = { version = "0.21.1" }
+serde_json = "1.0"
+serde = { version = "1.0", features = ["derive"] }
+
+[lib]
+name = "smolvlm_snap"
+path = "src/lib_simple.rs"
+crate-type = ["dylib"]
