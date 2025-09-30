@@ -45,14 +45,16 @@ class SmolVLMAndroid {
         }
     }
 
-    fun processImage(bitmap: Bitmap): Boolean {
-        // Ensure bitmap is in ARGB_8888 format
-        val config = if (bitmap.config == Bitmap.Config.ARGB_8888) bitmap else bitmap.copy(Bitmap.Config.ARGB_8888, false)
+    suspend fun processImage(bitmap: Bitmap): Boolean {
+        return withContext(runLoop) {
+            // Ensure bitmap is in ARGB_8888 format
+            val config = if (bitmap.config == Bitmap.Config.ARGB_8888) bitmap else bitmap.copy(Bitmap.Config.ARGB_8888, false)
 
-        val byteBuffer = ByteBuffer.allocateDirect(config.byteCount)
-        config.copyPixelsToBuffer(byteBuffer)
-        byteBuffer.rewind()
-        return processImageFromBuffer(byteBuffer, config.width, config.height)
+            val byteBuffer = ByteBuffer.allocateDirect(config.byteCount)
+            config.copyPixelsToBuffer(byteBuffer)
+            byteBuffer.rewind()
+            processImageFromBuffer(byteBuffer, config.width, config.height)
+        }
     }
 
     fun stopGeneration() {

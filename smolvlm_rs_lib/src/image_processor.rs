@@ -1,6 +1,6 @@
 use anyhow::Result;
 use image::{DynamicImage, GenericImageView};
-use ndarray::Array5;
+use ndarray::{Array4, Array5};
 use std::collections::HashMap;
 
 const MAX_IMAGE_SIZE: u32 = 4096; // 4k resolution as absolute maximum
@@ -48,112 +48,235 @@ impl SmolVLMImageProcessor {
     fn resize_output_size_rescale_to_max_len(
         height: u32,
         width: u32,
-        max_len: u32,
+        min_len: Option<u32>,
+        max_len: Option<u32>,
     ) -> (u32, u32) {
-        let max_original_size = height.max(width);
-        let ratio = max_len as f32 / max_original_size as f32;
-        let width = (width as f32 * ratio).round() as u32;
-        let height = (height as f32 * ratio).round() as u32;
+        let max_len = max_len.unwrap_or_else(|| height.max(width));
+        let aspect_ratio = width as f32 / height as f32;
+
+        let (mut width, mut height) = if width >= height {
+            let width = max_len;
+            let height = (width as f32 / aspect_ratio).round() as u32;
+            (width, height)
+        } else {
+            let height = max_len;
+            let width = (height as f32 * aspect_ratio).round() as u32;
+            (width, height)
+        };
+
+        // Avoid resizing to a size smaller than min_len
+        let min_len = min_len.unwrap_or(1);
+        height = height.max(min_len);
+        width = width.max(min_len);
+
         (height, width)
     }
 
-    fn rescale_size(size: (u32, u32), max_size: u32) -> (u32, u32) {
-        let (height, width) = size;
-        if height.max(width) <= max_size {
-            return size;
-        }
-        Self::resize_output_size_rescale_to_max_len(height, width, max_size)
+    fn resize_output_size_scale_below_upper_bound(
+        height: u32,
+        width: u32,
+        max_len: Option<u32>,
+    ) -> (u32, u32) {
+        let max_len = max_len.unwrap_or_else(|| height.max(width));
+        let aspect_ratio = width as f32 / height as f32;
+
+        let (mut width, mut height) = if width >= height && width > max_len {
+            let width = max_len;
+            let height = (width as f32 / aspect_ratio).round() as u32;
+            (width, height)
+        } else if height > width && height > max_len {
+            let height = max_len;
+            let width = (height as f32 * aspect_ratio).round() as u32;
+            (width, height)
+        } else {
+            (width, height)
+        };
+
+        // Avoid resizing to a size smaller than 1
+        height = height.max(1);
+        width = width.max(1);
+
+        (height, width)
     }
 
-    fn split_image(&self, image: &DynamicImage) -> Result<Vec<DynamicImage>> {
-        let (width, height) = image.dimensions();
-        let max_edge = self.max_image_size.get("longest_edge").unwrap_or(&512);
-
-        if width <= *max_edge && height <= *max_edge {
-            return Ok(vec![image.clone()]);
+    fn get_resize_output_image_size(
+        image: &DynamicImage,
+        resolution_max_side: u32,
+    ) -> (u32, u32) {
+        let (height, width) = (image.height(), image.width());
+        
+        // Only resize if the image is larger than resolution_max_side
+        if height <= resolution_max_side && width <= resolution_max_side {
+            return (height, width);
         }
 
-        let mut patches = Vec::new();
-        let patch_size = *max_edge;
+        // Find the output size, when rescaling the longest edge to max_len and preserving the aspect ratio
+        let (height, width) = Self::resize_output_size_rescale_to_max_len(height, width, None, Some(resolution_max_side));
+        
+        // Find the output size when scaling the image to be below the MAX_IMAGE_SIZE
+        let (height, width) = Self::resize_output_size_scale_below_upper_bound(height, width, Some(MAX_IMAGE_SIZE));
+        
+        (height, width)
+    }
 
-        for y in (0..height).step_by(patch_size as usize) {
-            for x in (0..width).step_by(patch_size as usize) {
-                let crop_width = (patch_size).min(width - x);
-                let crop_height = (patch_size).min(height - y);
+    fn convert_to_rgb(&self, image: DynamicImage) -> DynamicImage {
+        image.to_rgb8().into()
+    }
 
-                if crop_width > 0 && crop_height > 0 {
-                    let patch = image.crop_imm(x, y, crop_width, crop_height);
-                    patches.push(patch);
-                }
+    fn resize(&self, image: DynamicImage, size: HashMap<String, u32>) -> Result<DynamicImage> {
+        let (height, width) = if let Some(longest_edge) = size.get("longest_edge") {
+            Self::get_resize_output_image_size(&image, *longest_edge)
+        } else if let (Some(height), Some(width)) = (size.get("height"), size.get("width")) {
+            (*height, *width)
+        } else {
+            return Err(anyhow::anyhow!("size must be a dictionary with key 'longest_edge' or 'height' and 'width'"));
+        };
+
+        Ok(image.resize_exact(width, height, image::imageops::FilterType::Lanczos3))
+    }
+
+    fn split_image(
+        &self,
+        image: DynamicImage,
+        max_image_size: &HashMap<String, u32>,
+    ) -> Result<(Vec<DynamicImage>, u32, u32)> {
+        let (height, width) = (image.height(), image.width());
+        let max_size = max_image_size.get("longest_edge").unwrap_or(&512);
+
+        let mut frames = Vec::new();
+        
+        // Always do a 4x4 split
+        let num_splits_h = 4;
+        let num_splits_w = 4;
+        
+        // Calculate optimal split sizes
+        let optimal_height = (height as f32 / num_splits_h as f32).ceil() as u32;
+        let optimal_width = (width as f32 / num_splits_w as f32).ceil() as u32;
+
+        for r in 0..num_splits_h {
+            for c in 0..num_splits_w {
+                let start_x = c * optimal_width;
+                let start_y = r * optimal_height;
+                let end_x = (start_x + optimal_width).min(width);
+                let end_y = (start_y + optimal_height).min(height);
+
+                let cropped = image.crop_imm(start_x, start_y, end_x - start_x, end_y - start_y);
+                // Resize each cropped frame to 512x512 (hardcoded for vision encoder requirement)
+                let resized = self.resize(
+                    cropped,
+                    HashMap::from([
+                        ("height".to_string(), 512u32),
+                        ("width".to_string(), 512u32),
+                    ]),
+                )?;
+                frames.push(resized);
             }
         }
 
-        Ok(patches)
+        // Add the original image, resized to 512x512 (hardcoded for vision encoder requirement)
+        let resized = self.resize(
+            image,
+            HashMap::from([
+                ("height".to_string(), 512u32),
+                ("width".to_string(), 512u32),
+            ]),
+        )?;
+        frames.push(resized);
+
+        Ok((frames, num_splits_h, num_splits_w))
     }
 
-    pub fn preprocess(&self, image: &DynamicImage) -> Result<Array5<f32>> {
-        // Convert to RGB if needed
-        let image = if self.do_convert_rgb {
-            image.to_rgb8()
-        } else {
-            image.to_rgb8()
-        };
-        let image = DynamicImage::ImageRgb8(image);
+    pub fn preprocess(&self, image: DynamicImage) -> Result<(Array5<f32>, Array4<i64>)> {
+        let mut image = image;
 
-        // Resize
-        let image = if self.do_resize {
-            let (width, height) = image.dimensions();
-            let target_size = self.size.get("longest_edge").unwrap_or(&2048);
-            let (new_height, new_width) = Self::rescale_size((height, width), *target_size);
-            image.resize_exact(new_width, new_height, image::imageops::FilterType::CatmullRom)
-        } else {
-            image
-        };
+        // Convert to RGB if needed
+        if self.do_convert_rgb {
+            image = self.convert_to_rgb(image);
+        }
+
+        // Resize if needed - first resize to size["longest_edge"] while preserving aspect ratio
+        if self.do_resize {
+            image = self.resize(image, self.size.clone())?;
+        }
 
         // Split image if needed
-        let patches = if self.do_image_splitting {
-            self.split_image(&image)?
+        let (frames, num_splits_h, num_splits_w) = if self.do_image_splitting {
+            // First resize to be multiples of max_image_size while preserving aspect ratio
+            let max_size = self.max_image_size.get("longest_edge").unwrap_or(&512);
+            let (height, width) = (image.height(), image.width());
+            let aspect_ratio = width as f32 / height as f32;
+            
+            let (new_width, new_height) = if width >= height {
+                let new_width = ((width as f32 / *max_size as f32).ceil() * *max_size as f32) as u32;
+                let new_height = (new_width as f32 / aspect_ratio).round() as u32;
+                let new_height = ((new_height as f32 / *max_size as f32).ceil() * *max_size as f32) as u32;
+                (new_width, new_height)
+            } else {
+                let new_height = ((height as f32 / *max_size as f32).ceil() * *max_size as f32) as u32;
+                let new_width = (new_height as f32 * aspect_ratio).round() as u32;
+                let new_width = ((new_width as f32 / *max_size as f32).ceil() * *max_size as f32) as u32;
+                (new_width, new_height)
+            };
+
+            let resized = self.resize(
+                image,
+                HashMap::from([
+                    ("height".to_string(), new_height),
+                    ("width".to_string(), new_width),
+                ]),
+            )?;
+            
+            self.split_image(resized, &self.max_image_size)?
         } else {
-            vec![image]
+            // If not splitting, just resize to 512x512 (hardcoded for vision encoder requirement)
+            let resized = self.resize(
+                image,
+                HashMap::from([
+                    ("height".to_string(), 512u32),
+                    ("width".to_string(), 512u32),
+                ]),
+            )?;
+            (vec![resized], 0, 0)
         };
 
-        let num_patches = patches.len();
-        let patch_size = 384; // Fixed patch size for SmolVLM
+        // Convert frames to arrays and normalize
+        let mut processed_frames = Vec::new();
+        for frame in frames {
+            let mut array = Array5::<f32>::zeros((1, 1, 3, frame.height() as usize, frame.width() as usize));
 
-        let mut result = Array5::<f32>::zeros((1, num_patches, 3, patch_size, patch_size));
-
-        for (patch_idx, patch) in patches.iter().enumerate() {
-            // Resize patch to fixed size
-            let resized_patch = patch.resize_exact(
-                patch_size as u32,
-                patch_size as u32,
-                image::imageops::FilterType::CatmullRom,
-            );
-            let rgb_patch = resized_patch.to_rgb8();
-
-            // Convert to array with CHW format
-            for c in 0..3 {
-                for y in 0..patch_size {
-                    for x in 0..patch_size {
-                        let pixel = rgb_patch.get_pixel(x as u32, y as u32);
-                        let mut value = pixel[c] as f32;
-
-                        // Rescale
-                        if self.do_rescale {
-                            value *= self.rescale_factor;
-                        }
-
-                        // Normalize
-                        if self.do_normalize {
-                            value = (value - self.image_mean[c]) / self.image_std[c];
-                        }
-
-                        result[[0, patch_idx, c, y, x]] = value;
-                    }
+            for (y, x, pixel) in frame.pixels() {
+                for c in 0..3 {
+                    let val = pixel[c] as f32;
+                    let val = if self.do_rescale {
+                        val * self.rescale_factor
+                    } else {
+                        val
+                    };
+                    let val = if self.do_normalize {
+                        (val - self.image_mean[c]) / self.image_std[c]
+                    } else {
+                        val
+                    };
+                    array[[0, 0, c, y as usize, x as usize]] = val;
                 }
             }
+            processed_frames.push(array);
         }
 
-        Ok(result)
+        // Stack frames into a batch with shape (batch, num_frames, channels, height, width)
+        let batch = Array5::from_shape_fn(
+            (1, processed_frames.len(), 3, processed_frames[0].shape()[3], processed_frames[0].shape()[4]),
+            |(_, i, c, y, x)| {
+                let frame = &processed_frames[i];
+                frame[[0, 0, c, y, x]]
+            },
+        );
+
+        // Create attention mask with shape (batch, num_frames, height, width)
+        let height = processed_frames[0].shape()[3];
+        let width = processed_frames[0].shape()[4];
+        let attention_mask = Array4::ones((1, processed_frames.len(), height, width));
+
+        Ok((batch, attention_mask))
     }
-}
+} 

@@ -353,10 +353,11 @@ class MainActivity : AppCompatActivity() {
         binding.btnDismissResponse.visibility = View.GONE
 
         try {
-            vlmRunner.processImage(bitmap)
+            val imageProcessed = vlmRunner.processImage(bitmap)
+            Log.d("MainActivity", "Image processed: $imageProcessed")
 
-            Log.d("MainActivity", "Generating response for prompt: $prompt")
-            generationJob = scope.launch {
+            if (imageProcessed) {
+                Log.d("MainActivity", "Generating response for prompt: $prompt")
                 vlmRunner.generateResponse(prompt, 2048).collect { text ->
                     Log.d("MainActivity", "Received text: $text")
                     withContext(Dispatchers.Main) {
@@ -384,6 +385,9 @@ class MainActivity : AppCompatActivity() {
                         }
                     }
                 }
+            } else {
+                progressDialog.dismiss()
+                showResponseText("Failed to process image. Please try again.")
             }
         } catch (e: Exception) {
             Log.e("MainActivity", "Error generating response", e)

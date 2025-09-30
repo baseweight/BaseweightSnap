@@ -50,18 +50,24 @@ class SplashActivity : AppCompatActivity() {
             try {
                 // Check if models are already downloaded
                 val defaultModelName = ModelManager.DEFAULT_MODEL_NAME
+                Log.d(TAG, "Checking if models are downloaded for: $defaultModelName")
                 val modelsDownloaded = modelManager.isModelSetDownloaded(defaultModelName)
+                Log.d(TAG, "Models downloaded: $modelsDownloaded")
 
                 if (modelsDownloaded) {
+                    Log.d(TAG, "Models are downloaded, attempting to load...")
                     binding.splashStatus.text = "Loading models..."
                     if (loadModels()) {
+                        Log.d(TAG, "Models loaded successfully, starting main activity")
                         delay(500)
                         startMainActivity()
                     } else {
+                        Log.e(TAG, "Failed to load models into memory")
                         binding.splashStatus.text = "Failed to load models. Please try again."
                         binding.splashProgress.visibility = View.GONE
                     }
                 } else {
+                    Log.d(TAG, "Models not downloaded, checking WiFi...")
                     // Check if on WiFi
                     val isOnWifi = isOnWiFi()
                     if (isOnWifi) {
@@ -165,9 +171,18 @@ class SplashActivity : AppCompatActivity() {
                     return@withContext false
                 }
 
+                Log.d(TAG, "Model paths - modelDir: $modelDir, tokenizerPath: $tokenizerPath")
+
+                // Verify files exist before loading
+                val modelDirExists = File(modelDir).exists()
+                val tokenizerExists = File(tokenizerPath).exists()
+                Log.d(TAG, "File existence - modelDir: $modelDirExists, tokenizer: $tokenizerExists")
+
                 // Load the models
+                Log.d(TAG, "Calling vlmRunner.loadModels()...")
                 val success = vlmRunner.loadModels(modelDir, tokenizerPath)
-                
+                Log.d(TAG, "vlmRunner.loadModels() returned: $success")
+
                 if (!success) {
                     Log.e(TAG, "Failed to load models from: $modelDir and $tokenizerPath")
                 }
