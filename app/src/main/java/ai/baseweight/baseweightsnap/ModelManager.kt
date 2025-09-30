@@ -57,10 +57,10 @@ class ModelManager(private val context: Context) {
         private const val MODELS_DIR = "models"
         const val DEFAULT_MODEL_NAME = "SmolVLM2-256M-VidInstruct"
         
-        // HuggingFace URLs for the ONNX models
-        private const val VISION_ENCODER_URL = "https://huggingface.co/HuggingFaceTB/SmolVLM2-500M-Video-Instruct/resolve/main/onnx/vision_encoder_q4.onnx"
-        private const val EMBED_TOKENS_URL = "https://huggingface.co/HuggingFaceTB/SmolVLM2-500M-Video-Instruct/resolve/main/onnx/embed_tokens_q4.onnx"
-        private const val DECODER_MODEL_URL = "https://huggingface.co/HuggingFaceTB/SmolVLM2-500M-Video-Instruct/resolve/main/onnx/decoder_model_merged_q4.onnx"
+        // HuggingFace URLs for the ONNX models - using uint8 for better XNNPack support
+        private const val VISION_ENCODER_URL = "https://huggingface.co/HuggingFaceTB/SmolVLM2-500M-Video-Instruct/resolve/main/onnx/vision_encoder_uint8.onnx"
+        private const val EMBED_TOKENS_URL = "https://huggingface.co/HuggingFaceTB/SmolVLM2-500M-Video-Instruct/resolve/main/onnx/embed_tokens_uint8.onnx"
+        private const val DECODER_MODEL_URL = "https://huggingface.co/HuggingFaceTB/SmolVLM2-500M-Video-Instruct/resolve/main/onnx/decoder_model_merged_uint8.onnx"
         private const val TOKENIZER_URL = "https://huggingface.co/HuggingFaceTB/SmolVLM2-500M-Video-Instruct/raw/main/tokenizer.json"
     }
 
@@ -69,23 +69,23 @@ class ModelManager(private val context: Context) {
         SmolVLMModelSet(
             name = DEFAULT_MODEL_NAME,
             visionEncoder = Model(
-                id = "vision_encoder_q4",
-                name = "Vision Encoder Q4",
-                size = 66_700_000L, // 66.7 MB
+                id = "vision_encoder_uint8",
+                name = "Vision Encoder UInt8",
+                size = 133_400_000L, // ~133 MB (uint8 is ~2x larger than q4)
                 isDefault = true,
                 modelType = ModelType.VISION_ENCODER
             ),
             embedTokens = Model(
-                id = "embed_tokens_q4",
-                name = "Embed Tokens Q4",
-                size = 189_000_000L, // 189 MB
+                id = "embed_tokens_uint8",
+                name = "Embed Tokens UInt8",
+                size = 378_000_000L, // ~378 MB (uint8 is ~2x larger than q4)
                 isDefault = true,
                 modelType = ModelType.EMBED_TOKENS
             ),
             decoderModel = Model(
-                id = "decoder_model_merged_q4",
-                name = "Decoder Model Q4",
-                size = 229_000_000L, // 229 MB
+                id = "decoder_model_merged_uint8",
+                name = "Decoder Model UInt8",
+                size = 458_000_000L, // ~458 MB (uint8 is ~2x larger than q4)
                 isDefault = true,
                 modelType = ModelType.DECODER_MODEL
             ),

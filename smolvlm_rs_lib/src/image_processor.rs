@@ -244,20 +244,27 @@ impl SmolVLMImageProcessor {
         for frame in frames {
             let mut array = Array5::<f32>::zeros((1, 1, 3, frame.height() as usize, frame.width() as usize));
 
-            for (y, x, pixel) in frame.pixels() {
-                for c in 0..3 {
-                    let val = pixel[c] as f32;
-                    let val = if self.do_rescale {
-                        val * self.rescale_factor
-                    } else {
-                        val
-                    };
-                    let val = if self.do_normalize {
-                        (val - self.image_mean[c]) / self.image_std[c]
-                    } else {
-                        val
-                    };
-                    array[[0, 0, c, y as usize, x as usize]] = val;
+            // Convert to RGB if needed - image crate returns RGBA, we need RGB
+            let rgb_frame = frame.to_rgb8();
+
+            for y in 0..rgb_frame.height() {
+                for x in 0..rgb_frame.width() {
+                    let pixel = rgb_frame.get_pixel(x, y);
+                    // pixel[0] = R, pixel[1] = G, pixel[2] = B (correct RGB order)
+                    for c in 0..3 {
+                        let val = pixel[c] as f32;
+                        let val = if self.do_rescale {
+                            val * self.rescale_factor
+                        } else {
+                            val
+                        };
+                        let val = if self.do_normalize {
+                            (val - self.image_mean[c]) / self.image_std[c]
+                        } else {
+                            val
+                        };
+                        array[[0, 0, c, y as usize, x as usize]] = val;
+                    }
                 }
             }
             processed_frames.push(array);

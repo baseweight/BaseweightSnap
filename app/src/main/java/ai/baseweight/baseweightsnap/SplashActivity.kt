@@ -88,9 +88,14 @@ class SplashActivity : AppCompatActivity() {
         try {
             modelManager.downloadModelSet(ModelManager.DEFAULT_MODEL_NAME)
                 .collect { progress ->
-                    binding.splashStatus.text = "Downloading: ${progress.progress}%"
-                    if (progress.status == DownloadStatus.COMPLETED) {
-                        // Download is complete, load the models
+                    // Update progress display
+                    binding.splashStatus.text = progress.message
+
+                    // Only load models when ALL downloads are complete (this is the final COMPLETED status)
+                    if (progress.status == DownloadStatus.COMPLETED && progress.message.contains("All models downloaded")) {
+                        Log.d(TAG, "All models downloaded successfully, loading into memory...")
+                        binding.splashStatus.text = "Loading models..."
+
                         val modelSet = modelManager.getModelSet(ModelManager.DEFAULT_MODEL_NAME)!!
                         val modelDir = File(modelManager.getModelPath(modelSet.visionEncoderId)).parent!!
                         val tokenizerPath = modelManager.getTokenizerPath(modelSet.tokenizerId)
@@ -107,6 +112,9 @@ class SplashActivity : AppCompatActivity() {
                             Log.e(TAG, "Model files not found: $modelDir or $tokenizerPath")
                             showErrorAndExit("Download failed: Model files not found. Please try reinstalling the app.")
                         }
+                    } else if (progress.status == DownloadStatus.ERROR) {
+                        Log.e(TAG, "Download error: ${progress.message}")
+                        showErrorAndExit("Download failed: ${progress.message}")
                     }
                 }
         } catch (e: Exception) {

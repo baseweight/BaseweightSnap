@@ -23,7 +23,7 @@ pub mod smolvlm_snap {
 
     use ort::session::{builder::GraphOptimizationLevel, Session};
     use ort::value::Value;
-    use ort::execution_providers::XNNPACKExecutionProvider;
+    use ort::execution_providers::{XNNPACKExecutionProvider, ExecutionProvider};
     use image::{RgbImage, DynamicImage};
     use anyhow::{Result as AnyhowResult, Context};
     use ndarray::{Array2, Array3};
@@ -73,32 +73,47 @@ pub mod smolvlm_snap {
 
             // Configure session builder with XNNPack
             info!("SmolVLM: Configuring session builder with XNNPack");
+
+            // Check if XNNPack is available
+            match XNNPACKExecutionProvider::default().is_available() {
+                Ok(true) => info!("SmolVLM: XNNPack execution provider is AVAILABLE"),
+                Ok(false) => error!("SmolVLM: XNNPack execution provider is NOT AVAILABLE - will fall back to CPU!"),
+                Err(e) => error!("SmolVLM: Error checking XNNPack availability: {}", e),
+            }
+
+            // Try to enable XNNPack with explicit configuration
+            let xnnpack = XNNPACKExecutionProvider::default()
+                .with_intra_op_num_threads(std::num::NonZeroUsize::new(4).unwrap())
+                .build();
+
             let session_builder = Session::builder()?
                 .with_optimization_level(GraphOptimizationLevel::Level3)?
-                .with_execution_providers([XNNPACKExecutionProvider::default().build()])?;
-            info!("SmolVLM: Session builder configured");
+                .with_intra_threads(4)?
+                .with_execution_providers([xnnpack])?;
+            info!("SmolVLM: Session builder configured with XNNPack");
 
-            // Load vision encoder
-            let vision_path = format!("{}/vision_encoder_q4.onnx", model_dir);
-            info!("SmolVLM: Loading vision encoder from {}", vision_path);
+            // Load vision encoder - use uint8 for better XNNPack support
+            let vision_path = format!("{}/vision_encoder_uint8.onnx", model_dir);
+            info!("SmolVLM: Loading vision encoder (uint8) from {}", vision_path);
             let vision_session = session_builder
                 .clone()
                 .commit_from_file(&vision_path)
                 .context("Failed to load vision encoder")?;
+
             info!("SmolVLM: Vision encoder loaded successfully");
 
-            // Load embed tokens model
-            let embed_path = format!("{}/embed_tokens_q4.onnx", model_dir);
-            info!("SmolVLM: Loading embed tokens from {}", embed_path);
+            // Load embed tokens model - use uint8 for better XNNPack support
+            let embed_path = format!("{}/embed_tokens_uint8.onnx", model_dir);
+            info!("SmolVLM: Loading embed tokens (uint8) from {}", embed_path);
             let embed_session = session_builder
                 .clone()
                 .commit_from_file(&embed_path)
                 .context("Failed to load embed tokens model")?;
             info!("SmolVLM: Embed tokens loaded successfully");
 
-            // Load decoder model
-            let decoder_path = format!("{}/decoder_model_merged_q4.onnx", model_dir);
-            info!("SmolVLM: Loading decoder from {}", decoder_path);
+            // Load decoder model - use uint8 for better XNNPack support
+            let decoder_path = format!("{}/decoder_model_merged_uint8.onnx", model_dir);
+            info!("SmolVLM: Loading decoder (uint8) from {}", decoder_path);
             let decoder_session = session_builder
                 .commit_from_file(&decoder_path)
                 .context("Failed to load decoder model")?;
@@ -122,13 +137,15 @@ pub mod smolvlm_snap {
             info!("SmolVLM: Processing image {}x{}", width, height);
 
             // Convert ARGB8888 buffer to RGB image
+            // Android's ARGB_8888 with copyPixelsToBuffer gives us RGBA in memory
             let mut rgb_data = Vec::with_capacity((height * width * 3) as usize);
             for i in 0..(height * width) as usize {
                 let idx = i * 4;
-                // ARGB8888 format: [B, G, R, A] in memory
-                rgb_data.push(buffer[idx + 2]); // R
+                // RGBA format: [R, G, B, A] in memory
+                rgb_data.push(buffer[idx]);     // R
                 rgb_data.push(buffer[idx + 1]); // G
-                rgb_data.push(buffer[idx]);     // B
+                rgb_data.push(buffer[idx + 2]); // B
+                // Skip alpha channel (idx + 3)
             }
 
             let img = RgbImage::from_raw(
