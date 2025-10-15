@@ -23,7 +23,7 @@ import java.io.File
 class SplashActivity : AppCompatActivity() {
     private lateinit var binding: ActivitySplashBinding
     private val scope = CoroutineScope(Dispatchers.Main)
-    private val vlmRunner: MTMD_Android = MTMD_Android.instance()
+    private val vlmRunner: SmolVLMAndroid = SmolVLMAndroid.instance()
     private val modelManager: ModelManager by lazy { ModelManager(this) }
 
     private val DEFAULT_ERROR_MESSAGE = "An unexpected error occurred. Please try reinstalling the app."
@@ -50,18 +50,24 @@ class SplashActivity : AppCompatActivity() {
             try {
                 // Check if models are already downloaded
                 val defaultModelName = ModelManager.DEFAULT_MODEL_NAME
-                val modelsDownloaded = modelManager.isModelPairDownloaded(defaultModelName)
+                Log.d(TAG, "Checking if models are downloaded for: $defaultModelName")
+                val modelsDownloaded = modelManager.isModelSetDownloaded(defaultModelName)
+                Log.d(TAG, "Models downloaded: $modelsDownloaded")
 
                 if (modelsDownloaded) {
+                    Log.d(TAG, "Models are downloaded, attempting to load...")
                     binding.splashStatus.text = "Loading models..."
                     if (loadModels()) {
+                        Log.d(TAG, "Models loaded successfully, starting main activity")
                         delay(500)
                         startMainActivity()
                     } else {
+                        Log.e(TAG, "Failed to load models into memory")
                         binding.splashStatus.text = "Failed to load models. Please try again."
                         binding.splashProgress.visibility = View.GONE
                     }
                 } else {
+                    Log.d(TAG, "Models not downloaded, checking WiFi...")
                     // Check if on WiFi
                     val isOnWifi = isOnWiFi()
                     if (isOnWifi) {
@@ -80,25 +86,35 @@ class SplashActivity : AppCompatActivity() {
     private suspend fun downloadAndLoadModels() {
         binding.splashStatus.text = "Downloading models..."
         try {
-            modelManager.downloadModelPair(ModelManager.DEFAULT_MODEL_NAME)
+            modelManager.downloadModelSet(ModelManager.DEFAULT_MODEL_NAME)
                 .collect { progress ->
-                    binding.splashStatus.text = "Downloading: ${progress.progress}%"
-                    if (progress.status == DownloadStatus.COMPLETED) {
-                        // Download is complete, load the models
-                        val model = modelManager.getMTMDModel(ModelManager.DEFAULT_MODEL_NAME)!!
-                        val languagePath = modelManager.getModelPath(model.languageId)
-                        val visionPath = modelManager.getModelPath(model.visionId)
+                    // Update progress display
+                    binding.splashStatus.text = progress.message
 
-                        if (File(languagePath).exists() && File(visionPath).exists()) {
+                    // Only load models when ALL downloads are complete (this is the final COMPLETED status)
+                    if (progress.status == DownloadStatus.COMPLETED && progress.message.contains("All models downloaded")) {
+                        Log.d(TAG, "All models downloaded successfully, loading into memory...")
+                        binding.splashStatus.text = "Loading models..."
+
+                        val modelSet = modelManager.getModelSet(ModelManager.DEFAULT_MODEL_NAME)!!
+                        val modelDir = File(modelManager.getModelPath(modelSet.visionEncoderId)).parent!!
+                        val tokenizerPath = modelManager.getTokenizerPath(modelSet.tokenizerId)
+
+                        if (File(modelDir).exists() && File(tokenizerPath).exists()) {
                             if (loadModels()) {
                                 delay(500)
                                 startMainActivity()
                             } else {
+                                Log.e(TAG, "Failed to load models from: $modelDir and $tokenizerPath")
                                 showErrorAndExit("Failed to load models after download. Please try reinstalling the app.")
                             }
                         } else {
+                            Log.e(TAG, "Model files not found: $modelDir or $tokenizerPath")
                             showErrorAndExit("Download failed: Model files not found. Please try reinstalling the app.")
                         }
+                    } else if (progress.status == DownloadStatus.ERROR) {
+                        Log.e(TAG, "Download error: ${progress.message}")
+                        showErrorAndExit("Download failed: ${progress.message}")
                     }
                 }
         } catch (e: Exception) {
@@ -153,21 +169,30 @@ class SplashActivity : AppCompatActivity() {
     private suspend fun loadModels(): Boolean {
         return withContext(Dispatchers.IO) {
             try {
-                val model = modelManager.getMTMDModel(ModelManager.DEFAULT_MODEL_NAME)!!
-                val modelPath = modelManager.getModelPath(model.languageId)
-                val visionPath = modelManager.getModelPath(model.visionId)
-                
+                val modelSet = modelManager.getModelSet(ModelManager.DEFAULT_MODEL_NAME)!!
+                val modelDir = File(modelManager.getModelPath(modelSet.visionEncoderId)).parent!!
+                val tokenizerPath = modelManager.getTokenizerPath(modelSet.tokenizerId)
+
                 // Verify files exist before loading
-                if (!File(modelPath).exists() || !File(visionPath).exists()) {
-                    Log.e(TAG, "Model files not found: $modelPath or $visionPath")
+                if (!File(modelDir).exists() || !File(tokenizerPath).exists()) {
+                    Log.e(TAG, "Model files not found: $modelDir or $tokenizerPath")
                     return@withContext false
                 }
-                
+
+                Log.d(TAG, "Model paths - modelDir: $modelDir, tokenizerPath: $tokenizerPath")
+
+                // Verify files exist before loading
+                val modelDirExists = File(modelDir).exists()
+                val tokenizerExists = File(tokenizerPath).exists()
+                Log.d(TAG, "File existence - modelDir: $modelDirExists, tokenizer: $tokenizerExists")
+
                 // Load the models
-                val success = vlmRunner.loadModels(modelPath, visionPath)
-                
+                Log.d(TAG, "Calling vlmRunner.loadModels()...")
+                val success = vlmRunner.loadModels(modelDir, tokenizerPath)
+                Log.d(TAG, "vlmRunner.loadModels() returned: $success")
+
                 if (!success) {
-                    Log.e(TAG, "Failed to load models from: $modelPath and $visionPath")
+                    Log.e(TAG, "Failed to load models from: $modelDir and $tokenizerPath")
                 }
                 
                 success

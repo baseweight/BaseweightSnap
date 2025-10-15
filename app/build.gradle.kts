@@ -16,15 +16,9 @@ android {
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
-        externalNativeBuild {
-            cmake {
-                arguments("-DANDROID_STL=c++_shared")
-            }
-            // Don't build 32 bit libraries in 2025
-            ndk {
-                abiFilters.add("arm64-v8a")
-                abiFilters.add("x86_64")
-            }
+        // Removed CMake configuration - using pure Rust dylib like AnimeGanRust
+        ndk {
+            abiFilters.add("arm64-v8a")
         }
 
     }
@@ -45,12 +39,7 @@ android {
     kotlinOptions {
         jvmTarget = "11"
     }
-    externalNativeBuild {
-        cmake {
-            path = file("src/main/cpp/CMakeLists.txt")
-            version = "3.22.1"
-        }
-    }
+    // Removed CMake - using pure Rust dylib approach
     buildFeatures {
         viewBinding = true
     }
