@@ -15,9 +15,11 @@
 #include "llama.h"
 #include "common.h"
 #include "mtmd.h"
+#include "mtmd-helper.h"
 #include "clip.h"
 #include "model_manager.h"
 
+#undef TAG
 #define TAG "mtmd-android.cpp"
 #define LOGi(...) __android_log_print(ANDROID_LOG_INFO, TAG, __VA_ARGS__)
 #define LOGe(...) __android_log_print(ANDROID_LOG_ERROR, TAG, __VA_ARGS__)
@@ -159,7 +161,7 @@ Java_ai_baseweight_baseweightsnap_MTMD_1Android_process_1image(
     // Clear any existing bitmaps
     manager.clearBitmaps();
 
-    mtmd::bitmap bmp(mtmd_helper_bitmap_init_from_file(path_to_image));
+    mtmd::bitmap bmp(mtmd_helper_bitmap_init_from_file(manager.getVisionContext(), path_to_image));
     env->ReleaseStringUTFChars(image_path, path_to_image);
 
     if (!bmp.ptr) {
@@ -296,8 +298,8 @@ Java_ai_baseweight_baseweightsnap_MTMD_1Android_process_1image_1from_1byteBuff(J
     // TODO: implement process_image_from_byteBuff()
     jbyte* buff = (jbyte*)env->GetDirectBufferAddress(arr);
     jlong buff_len = env->GetDirectBufferCapacity(arr);
-    if (buff_len != width * height * 4) {
-        LOGe("Buffer size mismatch: expected %zu, got %lld", width * height * 4, buff_len);
+    if (buff_len != (jlong)(width * height * 4)) {
+        LOGe("Buffer size mismatch: expected %d, got %ld", width * height * 4, (long)buff_len);
         return JNI_FALSE;
     }
 

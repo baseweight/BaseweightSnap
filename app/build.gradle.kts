@@ -54,7 +54,14 @@ android {
     buildFeatures {
         viewBinding = true
     }
-    ndkVersion = "28.0.12916984 rc3"
+    ndkVersion = "28.2.13676358"
+    
+    packaging {
+        jniLibs {
+            pickFirsts.add("lib/arm64-v8a/libc++_shared.so")
+            pickFirsts.add("lib/x86_64/libc++_shared.so")
+        }
+    }
 }
 
 dependencies {

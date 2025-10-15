@@ -1,5 +1,6 @@
 #include "common.h"
 #include "mtmd.h"
+#include "mtmd-helper.h"
 #include "clip.h"
 #include "model_manager.h"
 #include <android/log.h>
@@ -12,6 +13,7 @@ std::atomic<bool> g_should_stop{false};
 // Initialize static member
 JavaVM* ModelManager::javaVM = nullptr;
 
+#undef TAG
 #define TAG "model_manager.cpp"
 #define LOGi(...) __android_log_print(ANDROID_LOG_INFO, TAG, __VA_ARGS__)
 #define LOGe(...) __android_log_print(ANDROID_LOG_ERROR, TAG, __VA_ARGS__)
@@ -34,7 +36,7 @@ void ModelManager::cleanup() {
         lctx = nullptr;
     }
     if (model) {
-        llama_free_model(model);
+        llama_model_free(model);
         model = nullptr;
     }
     vocab = nullptr;
@@ -80,7 +82,7 @@ bool ModelManager::loadLanguageModel(const char* model_path) {
     
     llama_model_params model_params = llama_model_default_params();
     // Let's try something here
-    model_params.n_gpu_layers = gpu_layers;
+    //model_params.n_gpu_layers = gpu_layers;
     model = llama_model_load_from_file(model_path, model_params);
     if (!model) {
         LOGe("Failed to load language model from %s", model_path);
@@ -138,7 +140,7 @@ bool ModelManager::initializeSampler() {
 }
 
 bool ModelManager::processImage(const char* image_path) {
-    mtmd::bitmap bmp(mtmd_helper_bitmap_init_from_file(image_path));
+    mtmd::bitmap bmp(mtmd_helper_bitmap_init_from_file(ctx_vision.get(), image_path));
     if (!bmp.ptr) {
         LOGe("Failed to load image from %s", image_path);
         return false;
@@ -415,7 +417,7 @@ int32_t ModelManager::evalChunksWithProgress(mtmd_context * ctx,
         auto chunk = mtmd_input_chunks_get(chunks, i);
 
         int32_t res = mtmd_helper_eval_chunk_single(ctx, lctx, chunk, n_past, seq_id, 
-                                                  n_batch, chunk_logits_last, &n_past);
+                                                     n_batch, chunk_logits_last, &n_past);
         if (res != 0) {
             LOGe("failed to eval chunk %zu\n", i);
             return res;
