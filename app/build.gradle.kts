@@ -18,12 +18,16 @@ android {
 
         externalNativeBuild {
             cmake {
-                arguments("-DANDROID_STL=c++_shared")
+                arguments(
+                    "-DANDROID_STL=c++_shared",
+                    "-DCMAKE_BUILD_TYPE=Release",
+                    "-DANDROID_ARM_NEON=ON"
+                )
+                cppFlags += "-std=c++17"
             }
-            // Don't build 32 bit libraries in 2025
+            // Only build arm64-v8a (ExecuTorch only built for this architecture)
             ndk {
                 abiFilters.add("arm64-v8a")
-                abiFilters.add("x86_64")
             }
         }
 
@@ -54,7 +58,7 @@ android {
     buildFeatures {
         viewBinding = true
     }
-    ndkVersion = "28.0.12916984 rc3"
+    ndkVersion = "28.2.13676358"
 }
 
 dependencies {

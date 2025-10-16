@@ -52,7 +52,7 @@ class MainActivity : AppCompatActivity() {
     private var currentCameraSelector = CameraSelector.DEFAULT_BACK_CAMERA
     private val scope = CoroutineScope(Dispatchers.Main)
     private var generationJob: Job? = null
-    private val vlmRunner: MTMD_Android = MTMD_Android.instance()
+    private val nanoVLM: NanoVLM_Android = NanoVLM_Android.instance()
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -228,7 +228,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun stopGeneration() {
         generationJob?.cancel()
-        vlmRunner.stopGeneration()
+        // NanoVLM doesn't have stopGeneration - generation is synchronous
     }
 
     private fun hideResponseText() {
@@ -353,35 +353,33 @@ class MainActivity : AppCompatActivity() {
         binding.btnDismissResponse.visibility = View.GONE
 
         try {
-            vlmRunner.processImage(bitmap)
+            // Process image
+            progressText?.text = "Processing image..."
+            val imageProcessed = nanoVLM.processImage(bitmap)
 
+            if (!imageProcessed) {
+                progressDialog.dismiss()
+                showResponseText("Failed to process image")
+                return
+            }
+
+            // Generate response
             Log.d("MainActivity", "Generating response for prompt: $prompt")
+            progressText?.text = "Generating response..."
+            progressBar?.isIndeterminate = true
+
             generationJob = scope.launch {
-                vlmRunner.generateResponse(prompt, 2048).collect { text ->
+                nanoVLM.generateResponse(prompt, 150).collect { text ->
                     Log.d("MainActivity", "Received text: $text")
                     withContext(Dispatchers.Main) {
-                        if (text.startsWith("PROGRESS:")) {
-                            // Handle progress update
-                            val parts = text.substring(9).split(":")
-                            if (parts.size == 2) {
-                                val (phase, progress) = parts
-                                progressText?.text = phase
-                                progressBar?.progress = progress.toInt()
-                            }
-                        } else {
-                            // Handle generated text
-                            Log.d("MainActivity", "Generated text: $text")
-                            // Show text view and dismiss dialog when we get actual text
-                            progressDialog.dismiss()
-                            binding.responseText.visibility = View.VISIBLE
-                            binding.btnDismissResponse.visibility = View.VISIBLE
-                            if(binding.responseText.text.isEmpty()) {
-                                binding.responseText.text = text
-                            } else {
-                                binding.responseText.append(text)
-                            }
-                            binding.responseText.invalidate()
-                        }
+                        // Handle generated text
+                        Log.d("MainActivity", "Generated text: $text")
+                        // Show text view and dismiss dialog when we get actual text
+                        progressDialog.dismiss()
+                        binding.responseText.visibility = View.VISIBLE
+                        binding.btnDismissResponse.visibility = View.VISIBLE
+                        binding.responseText.text = text
+                        binding.responseText.invalidate()
                     }
                 }
             }
