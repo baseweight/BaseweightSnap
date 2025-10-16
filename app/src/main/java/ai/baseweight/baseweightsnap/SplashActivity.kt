@@ -23,7 +23,7 @@ import java.io.File
 class SplashActivity : AppCompatActivity() {
     private lateinit var binding: ActivitySplashBinding
     private val scope = CoroutineScope(Dispatchers.Main)
-    private val vlmRunner: MTMD_Android = MTMD_Android.instance()
+    private val nanoVLM: NanoVLM_Android = NanoVLM_Android.instance()
     private val modelManager: ModelManager by lazy { ModelManager(this) }
 
     private val DEFAULT_ERROR_MESSAGE = "An unexpected error occurred. Please try reinstalling the app."
@@ -31,13 +31,13 @@ class SplashActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        
+
         // Set full screen
         window.setFlags(
             WindowManager.LayoutParams.FLAG_FULLSCREEN,
             WindowManager.LayoutParams.FLAG_FULLSCREEN
         )
-        
+
         binding = ActivitySplashBinding.inflate(layoutInflater)
         setContentView(binding.root)
 
@@ -50,7 +50,7 @@ class SplashActivity : AppCompatActivity() {
             try {
                 // Check if models are already downloaded
                 val defaultModelName = ModelManager.DEFAULT_MODEL_NAME
-                val modelsDownloaded = modelManager.isModelPairDownloaded(defaultModelName)
+                val modelsDownloaded = modelManager.isModelDownloaded(defaultModelName)
 
                 if (modelsDownloaded) {
                     binding.splashStatus.text = "Loading models..."
@@ -79,31 +79,48 @@ class SplashActivity : AppCompatActivity() {
 
     private suspend fun downloadAndLoadModels() {
         binding.splashStatus.text = "Downloading models..."
-        try {
-            modelManager.downloadModelPair(ModelManager.DEFAULT_MODEL_NAME)
-                .collect { progress ->
-                    binding.splashStatus.text = "Downloading: ${progress.progress}%"
-                    if (progress.status == DownloadStatus.COMPLETED) {
-                        // Download is complete, load the models
-                        val model = modelManager.getMTMDModel(ModelManager.DEFAULT_MODEL_NAME)!!
-                        val languagePath = modelManager.getModelPath(model.languageId)
-                        val visionPath = modelManager.getModelPath(model.visionId)
+        binding.splashProgress.visibility = View.VISIBLE
 
-                        if (File(languagePath).exists() && File(visionPath).exists()) {
-                            if (loadModels()) {
-                                delay(500)
-                                startMainActivity()
+        try {
+            modelManager.downloadModel(ModelManager.DEFAULT_MODEL_NAME)
+                .collect { progress ->
+                    // Update progress UI
+                    binding.splashProgress.progress = progress.progress
+
+                    when (progress.status) {
+                        DownloadStatus.PENDING -> {
+                            binding.splashStatus.text = progress.message
+                        }
+                        DownloadStatus.DOWNLOADING -> {
+                            binding.splashStatus.text = "Downloading ${progress.currentFile}: ${progress.progress}%"
+                        }
+                        DownloadStatus.COMPLETED -> {
+                            // All files downloaded successfully
+                            binding.splashStatus.text = "Download complete! Loading models..."
+                            binding.splashProgress.visibility = View.GONE
+
+                            // Verify all files exist
+                            if (modelManager.isModelDownloaded(ModelManager.DEFAULT_MODEL_NAME)) {
+                                if (loadModels()) {
+                                    delay(500)
+                                    startMainActivity()
+                                } else {
+                                    showErrorAndExit("Failed to load models after download. Please try reinstalling the app.")
+                                }
                             } else {
-                                showErrorAndExit("Failed to load models after download. Please try reinstalling the app.")
+                                showErrorAndExit("Download verification failed: Some model files are missing. Please try reinstalling the app.")
                             }
-                        } else {
-                            showErrorAndExit("Download failed: Model files not found. Please try reinstalling the app.")
+                        }
+                        DownloadStatus.ERROR -> {
+                            binding.splashProgress.visibility = View.GONE
+                            showErrorAndExit("Download failed: ${progress.message}")
                         }
                     }
                 }
         } catch (e: Exception) {
             val errorMessage = e.message ?: DEFAULT_ERROR_MESSAGE
             Log.e(TAG, "Error downloading models: $errorMessage", e)
+            binding.splashProgress.visibility = View.GONE
             showErrorAndExit("Error downloading models: $errorMessage")
         }
     }
@@ -112,7 +129,7 @@ class SplashActivity : AppCompatActivity() {
         scope.launch(Dispatchers.Main) {
             // Log the error
             Log.e(TAG, message)
-            
+
             // Show error dialog
             AlertDialog.Builder(this@SplashActivity)
                 .setTitle("Error")
@@ -130,7 +147,7 @@ class SplashActivity : AppCompatActivity() {
     private fun showWiFiWarningDialog() {
         AlertDialog.Builder(this)
             .setTitle("Large File Download Warning")
-            .setMessage("These are large files (total ~2.4GB). Please connect to WiFi for the best experience.\n\nWould you like to continue downloading anyway?")
+            .setMessage("These are large files (total ~520MB). Please connect to WiFi for the best experience.\n\nWould you like to continue downloading anyway?")
             .setPositiveButton("Continue") { _, _ ->
                 scope.launch {
                     downloadAndLoadModels()
@@ -153,23 +170,36 @@ class SplashActivity : AppCompatActivity() {
     private suspend fun loadModels(): Boolean {
         return withContext(Dispatchers.IO) {
             try {
-                val model = modelManager.getMTMDModel(ModelManager.DEFAULT_MODEL_NAME)!!
-                val modelPath = modelManager.getModelPath(model.languageId)
-                val visionPath = modelManager.getModelPath(model.visionId)
-                
-                // Verify files exist before loading
-                if (!File(modelPath).exists() || !File(visionPath).exists()) {
-                    Log.e(TAG, "Model files not found: $modelPath or $visionPath")
+                val modelDirPath = modelManager.getModelDirectoryPath()
+                val tokenizerPath = modelManager.getTokenizerPath()
+
+                Log.d(TAG, "Loading models from: $modelDirPath")
+                Log.d(TAG, "Loading tokenizer from: $tokenizerPath")
+
+                // Verify model directory exists
+                val modelDir = File(modelDirPath)
+                if (!modelDir.exists() || !modelDir.isDirectory) {
+                    Log.e(TAG, "Model directory not found: $modelDirPath")
                     return@withContext false
                 }
-                
-                // Load the models
-                val success = vlmRunner.loadModels(modelPath, visionPath)
-                
-                if (!success) {
-                    Log.e(TAG, "Failed to load models from: $modelPath and $visionPath")
+
+                // Verify tokenizer file exists
+                val tokenizerFile = File(tokenizerPath)
+                if (!tokenizerFile.exists()) {
+                    Log.e(TAG, "Tokenizer file not found: $tokenizerPath")
+                    return@withContext false
                 }
-                
+
+                // Load the models
+                val success = nanoVLM.loadModels(modelDirPath, tokenizerPath)
+
+                if (success) {
+                    nanoVLM.setLoaded(true)
+                    Log.d(TAG, "Successfully loaded NanoVLM models")
+                } else {
+                    Log.e(TAG, "Failed to load NanoVLM models")
+                }
+
                 success
             } catch (e: Exception) {
                 Log.e(TAG, "Error loading models: ${e.message}", e)
@@ -183,4 +213,11 @@ class SplashActivity : AppCompatActivity() {
         startActivity(intent)
         finish()
     }
-} 
+
+    override fun onDestroy() {
+        super.onDestroy()
+        scope.launch {
+            // Don't unload models here - they need to persist to MainActivity
+        }
+    }
+}
