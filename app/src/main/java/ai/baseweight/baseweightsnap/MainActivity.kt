@@ -86,6 +86,7 @@ class MainActivity : AppCompatActivity() {
         binding.btnCancelInput.setOnClickListener { hideTextInput() }
         binding.btnSubmitInput.setOnClickListener { submitTextInput() }
         binding.btnDismissResponse.setOnClickListener { hideResponseText() }
+        binding.btnSettings.setOnClickListener { openModelManager() }
 
         // Setup text input
         binding.promptInput.setOnEditorActionListener { _, actionId, _ ->
@@ -437,6 +438,11 @@ class MainActivity : AppCompatActivity() {
         super.onDestroy()
         stopGeneration()  // Stop any ongoing generation
         cameraExecutor.shutdown()
+    }
+
+    private fun openModelManager() {
+        val intent = Intent(this, ai.baseweight.baseweightsnap.ui.ModelManagerActivity::class.java)
+        startActivity(intent)
     }
 
     private fun showInstructionsDialog() {

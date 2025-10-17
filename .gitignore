@@ -13,3 +13,17 @@
 .externalNativeBuild
 .cxx
 local.properties
+
+# IDE
+.idea/
+.vscode/
+
+# Rust build artifacts
+rust-tokenizer/target/
+
+# Release builds
+app/release/
+
+# Temporary files
+*.tmp
+*.swp

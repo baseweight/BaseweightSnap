@@ -48,26 +48,41 @@ class SplashActivity : AppCompatActivity() {
     private fun checkAndLoadModels() {
         scope.launch {
             try {
-                // Check if models are already downloaded
-                val defaultModelName = ModelManager.DEFAULT_MODEL_NAME
-                val modelsDownloaded = modelManager.isModelPairDownloaded(defaultModelName)
+                // First, check for HF downloaded models
+                val defaultHFModel = modelManager.getDefaultModel()
 
-                if (modelsDownloaded) {
-                    binding.splashStatus.text = "Loading models..."
-                    if (loadModels()) {
+                if (defaultHFModel != null) {
+                    // Use the default HF model
+                    binding.splashStatus.text = "Loading ${defaultHFModel.name}..."
+                    if (loadHFModel(defaultHFModel)) {
                         delay(500)
                         startMainActivity()
                     } else {
-                        binding.splashStatus.text = "Failed to load models. Please try again."
+                        binding.splashStatus.text = "Failed to load model. Please try again."
                         binding.splashProgress.visibility = View.GONE
                     }
                 } else {
-                    // Check if on WiFi
-                    val isOnWifi = isOnWiFi()
-                    if (isOnWifi) {
-                        downloadAndLoadModels()
+                    // Fall back to legacy SmolVLM2 download
+                    val defaultModelName = ModelManager.DEFAULT_MODEL_NAME
+                    val modelsDownloaded = modelManager.isModelPairDownloaded(defaultModelName)
+
+                    if (modelsDownloaded) {
+                        binding.splashStatus.text = "Loading models..."
+                        if (loadModels()) {
+                            delay(500)
+                            startMainActivity()
+                        } else {
+                            binding.splashStatus.text = "Failed to load models. Please try again."
+                            binding.splashProgress.visibility = View.GONE
+                        }
                     } else {
-                        showWiFiWarningDialog()
+                        // Check if on WiFi
+                        val isOnWifi = isOnWiFi()
+                        if (isOnWifi) {
+                            downloadAndLoadModels()
+                        } else {
+                            showWiFiWarningDialog()
+                        }
                     }
                 }
             } catch (e: Exception) {
@@ -150,26 +165,59 @@ class SplashActivity : AppCompatActivity() {
         return networkCapabilities.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)
     }
 
+    private suspend fun loadHFModel(metadata: ai.baseweight.baseweightsnap.models.HFModelMetadata): Boolean {
+        return withContext(Dispatchers.IO) {
+            try {
+                val paths = modelManager.getHFModelPaths(metadata.id)
+
+                if (paths == null) {
+                    Log.e(TAG, "Failed to get paths for HF model: ${metadata.id}")
+                    return@withContext false
+                }
+
+                val (languagePath, visionPath) = paths
+
+                // Verify files exist before loading
+                if (!File(languagePath).exists() || !File(visionPath).exists()) {
+                    Log.e(TAG, "HF Model files not found: $languagePath or $visionPath")
+                    return@withContext false
+                }
+
+                // Load the models
+                val success = vlmRunner.loadModels(languagePath, visionPath)
+
+                if (!success) {
+                    Log.e(TAG, "Failed to load HF models from: $languagePath and $visionPath")
+                }
+
+                success
+            } catch (e: Exception) {
+                Log.e(TAG, "Error loading HF model: ${e.message}", e)
+                false
+            }
+        }
+    }
+
     private suspend fun loadModels(): Boolean {
         return withContext(Dispatchers.IO) {
             try {
                 val model = modelManager.getMTMDModel(ModelManager.DEFAULT_MODEL_NAME)!!
                 val modelPath = modelManager.getModelPath(model.languageId)
                 val visionPath = modelManager.getModelPath(model.visionId)
-                
+
                 // Verify files exist before loading
                 if (!File(modelPath).exists() || !File(visionPath).exists()) {
                     Log.e(TAG, "Model files not found: $modelPath or $visionPath")
                     return@withContext false
                 }
-                
+
                 // Load the models
                 val success = vlmRunner.loadModels(modelPath, visionPath)
-                
+
                 if (!success) {
                     Log.e(TAG, "Failed to load models from: $modelPath and $visionPath")
                 }
-                
+
                 success
             } catch (e: Exception) {
                 Log.e(TAG, "Error loading models: ${e.message}", e)
