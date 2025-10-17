@@ -82,7 +82,7 @@ bool ModelManager::loadLanguageModel(const char* model_path) {
     
     llama_model_params model_params = llama_model_default_params();
     // Let's try something here
-    //model_params.n_gpu_layers = gpu_layers;
+    model_params.n_gpu_layers = gpu_layers;
     model = llama_model_load_from_file(model_path, model_params);
     if (!model) {
         LOGe("Failed to load language model from %s", model_path);
@@ -413,16 +413,25 @@ int32_t ModelManager::evalChunksWithProgress(mtmd_context * ctx,
 
     // Process chunks sequentially
     for (size_t i = 0; i < n_chunks; i++) {
+        LOGi("Processing chunk %zu/%zu", i+1, n_chunks);
         bool chunk_logits_last = (i == n_chunks - 1) && logits_last;
         auto chunk = mtmd_input_chunks_get(chunks, i);
 
-        int32_t res = mtmd_helper_eval_chunk_single(ctx, lctx, chunk, n_past, seq_id, 
+        // Log chunk type for debugging
+        auto chunk_type = mtmd_input_chunk_get_type(chunk);
+        const char* type_name = (chunk_type == MTMD_INPUT_CHUNK_TYPE_TEXT) ? "TEXT" :
+                               (chunk_type == MTMD_INPUT_CHUNK_TYPE_IMAGE) ? "IMAGE" :
+                               (chunk_type == MTMD_INPUT_CHUNK_TYPE_AUDIO) ? "AUDIO" : "UNKNOWN";
+        LOGi("Chunk %zu type: %s", i+1, type_name);
+
+        int32_t res = mtmd_helper_eval_chunk_single(ctx, lctx, chunk, n_past, seq_id,
                                                      n_batch, chunk_logits_last, &n_past);
         if (res != 0) {
             LOGe("failed to eval chunk %zu\n", i);
             return res;
         }
         *new_n_past = n_past;
+        LOGi("Completed chunk %zu/%zu", i+1, n_chunks);
 
     }
 

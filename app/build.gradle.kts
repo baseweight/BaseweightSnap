@@ -18,7 +18,10 @@ android {
 
         externalNativeBuild {
             cmake {
-                arguments("-DANDROID_STL=c++_shared")
+                arguments(
+                    "-DANDROID_STL=c++_shared",
+                    "-DBUILD_VARIANT=${project.findProperty("BUILD_VARIANT") ?: "cpu"}"
+                )
             }
             // Don't build 32 bit libraries in 2025
             ndk {
@@ -49,6 +52,13 @@ android {
         cmake {
             path = file("src/main/cpp/CMakeLists.txt")
             version = "3.22.1"
+        }
+    }
+
+    // Configure native builds for multiple library variants
+    sourceSets {
+        getByName("main") {
+            jniLibs.srcDirs("src/main/jniLibs")
         }
     }
     buildFeatures {

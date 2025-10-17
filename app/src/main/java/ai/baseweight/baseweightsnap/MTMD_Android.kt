@@ -14,15 +14,19 @@ import java.nio.ByteBuffer
 import java.util.concurrent.Executors
 import kotlin.concurrent.thread
 
-class MTMD_Android {
+class MTMD_Android(private val context: android.content.Context) {
     private val tag: String? = this::class.simpleName
 
     private val runLoop: CoroutineDispatcher = Executors.newSingleThreadExecutor {
         thread(start = false, name = "Llm-RunLoop") {
             Log.d(tag, "Dedicated thread for native code: ${Thread.currentThread().name}")
 
+            // Dynamically load the appropriate library based on Vulkan support
+            val libraryName = VulkanDetector.getLibraryName(context)
+            Log.i(tag, "Loading native library: $libraryName")
+
             // No-op if called more than once.
-            System.loadLibrary("baseweightsnap")
+            System.loadLibrary(libraryName)
 
             // Set llama log handler to Android
             log_to_android()
@@ -130,7 +134,13 @@ class MTMD_Android {
 
     companion object {
         // Enforce only one instance of MTMD_Android
-        private val _instance: MTMD_Android = MTMD_Android()
-        fun instance(): MTMD_Android = _instance
+        @Volatile
+        private var _instance: MTMD_Android? = null
+
+        fun instance(context: android.content.Context): MTMD_Android {
+            return _instance ?: synchronized(this) {
+                _instance ?: MTMD_Android(context.applicationContext).also { _instance = it }
+            }
+        }
     }
 }
