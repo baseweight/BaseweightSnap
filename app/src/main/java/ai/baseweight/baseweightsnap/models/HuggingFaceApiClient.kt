@@ -87,12 +87,7 @@ class HuggingFaceApiClient {
         val files = filesResult.getOrNull()!!
         Log.d(TAG, "Analyzing files: ${files.map { it.path }}")
 
-        // Find config.json
-        val configFile = files.find { it.isConfig }
-        if (configFile == null) {
-            Log.e(TAG, "Missing config.json")
-            return Result.failure(Exception("Missing config.json"))
-        }
+        // Note: config.json is not required for GGUF model loading with llama.cpp
 
         // Find vision model (mmproj GGUF)
         val visionFiles = files.filter { it.isMMProj }
@@ -117,12 +112,12 @@ class HuggingFaceApiClient {
         val languageFile = languageFiles.first()
 
         val modelFiles = HFModelFiles(
-            configFile = configFile,
+            configFile = null, // config.json not needed for GGUF models
             languageFile = languageFile,
             visionFile = visionFile
         )
 
-        Log.d(TAG, "Found required files: config=${configFile.path}, language=${languageFile.path}, vision=${visionFile.path}")
+        Log.d(TAG, "Found required files: language=${languageFile.path}, vision=${visionFile.path}")
         return Result.success(modelFiles)
     }
 
@@ -147,8 +142,6 @@ class HuggingFaceApiClient {
         val filesResult = findRequiredFiles(repo)
         if (filesResult.isFailure) {
             val error = when {
-                filesResult.exceptionOrNull()?.message?.contains("config.json") == true ->
-                    ValidationError.MISSING_CONFIG
                 filesResult.exceptionOrNull()?.message?.contains("vision") == true ->
                     ValidationError.MISSING_VISION_MODEL
                 filesResult.exceptionOrNull()?.message?.contains("language") == true ->
@@ -173,7 +166,7 @@ class HuggingFaceApiClient {
     /**
      * Make an HTTP GET request
      */
-    private fun makeRequest(url: String): String {
+    private suspend fun makeRequest(url: String): String = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
         val connection = URL(url).openConnection() as HttpURLConnection
         try {
             connection.requestMethod = "GET"
@@ -187,7 +180,7 @@ class HuggingFaceApiClient {
                 throw Exception("HTTP $responseCode: ${connection.responseMessage}${errorStream?.let { "\n$it" } ?: ""}")
             }
 
-            return connection.inputStream.bufferedReader().use { it.readText() }
+            return@withContext connection.inputStream.bufferedReader().use { it.readText() }
         } finally {
             connection.disconnect()
         }

@@ -79,18 +79,18 @@ class HFModelMetadataTest {
     @Test
     fun `test HFModelFiles totalSize`() {
         val files = HFModelFiles(
-            configFile = HFFile("config.json", 1000L),
+            configFile = null, // config.json not needed for GGUF models
             languageFile = HFFile("model.gguf", 100_000L),
             visionFile = HFFile("mmproj.gguf", 50_000L)
         )
 
-        assertEquals(151_000L, files.totalSize)
+        assertEquals(150_000L, files.totalSize)
     }
 
     @Test
     fun `test ValidationResult Valid`() {
         val files = HFModelFiles(
-            configFile = HFFile("config.json", 1000L),
+            configFile = null, // config.json not needed for GGUF models
             languageFile = HFFile("model.gguf", 100_000L),
             visionFile = HFFile("mmproj.gguf", 50_000L)
         )
@@ -101,8 +101,8 @@ class HFModelMetadataTest {
 
     @Test
     fun `test ValidationResult Invalid`() {
-        val result = ValidationResult.Invalid(ValidationError.MISSING_CONFIG)
+        val result = ValidationResult.Invalid(ValidationError.MISSING_LANGUAGE_MODEL)
         assertTrue(result is ValidationResult.Invalid)
-        assertEquals(ValidationError.MISSING_CONFIG, (result as ValidationResult.Invalid).error)
+        assertEquals(ValidationError.MISSING_LANGUAGE_MODEL, (result as ValidationResult.Invalid).error)
     }
 }

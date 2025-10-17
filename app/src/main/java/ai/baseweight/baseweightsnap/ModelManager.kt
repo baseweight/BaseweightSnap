@@ -85,6 +85,58 @@ class ModelManager(private val context: Context) {
     init {
         // Create models directory in external storage if it doesn't exist
         getModelsDirectory().mkdirs()
+
+        // Migrate existing legacy SmolVLM2 models to metadata
+        migrateLegacyModels()
+    }
+
+    /**
+     * Migrate legacy SmolVLM2 models to HF metadata system
+     */
+    private fun migrateLegacyModels() {
+        try {
+            // Check if legacy SmolVLM2 files exist
+            val mtmdModel = getMTMDModel(DEFAULT_MODEL_NAME) ?: return
+            val languagePath = getModelPath(mtmdModel.languageId)
+            val visionPath = getModelPath(mtmdModel.visionId)
+
+            val languageFile = File(languagePath)
+            val visionFile = File(visionPath)
+
+            if (languageFile.exists() && visionFile.exists()) {
+                // Check if already migrated
+                val existing = metadataManager.getAllModels().find {
+                    it.hfRepo == DEFAULT_HF_REPO
+                }
+
+                if (existing == null) {
+                    // Create metadata for legacy model
+                    val metadata = HFModelMetadata(
+                        id = "legacy-smolvlm2-256m",
+                        name = DEFAULT_MODEL_NAME,
+                        hfRepo = DEFAULT_HF_REPO,
+                        languageFile = "SmolVLM2-256M-Video-Instruct-Q8_0.gguf",
+                        visionFile = "mmproj-SmolVLM2-256M-Video-Instruct-Q8_0.gguf",
+                        configFile = null, // config.json not needed for GGUF models
+                        downloadDate = languageFile.lastModified(),
+                        languageSize = languageFile.length(),
+                        visionSize = visionFile.length()
+                    )
+
+                    metadataManager.saveMetadata(metadata)
+
+                    // Set as default if no other default exists
+                    if (metadataManager.getDefaultModel() == null) {
+                        metadataManager.setDefaultModel(metadata.id)
+                        Log.d(TAG, "Migrated legacy SmolVLM2 model and set as default")
+                    } else {
+                        Log.d(TAG, "Migrated legacy SmolVLM2 model")
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Error migrating legacy models: ${e.message}", e)
+        }
     }
 
     private fun getModelsDirectory(): File {
@@ -274,7 +326,6 @@ class ModelManager(private val context: Context) {
         if (validation is ValidationResult.Invalid) {
             val errorMsg = when (validation.error) {
                 ValidationError.REPO_NOT_FOUND -> "Repository not found"
-                ValidationError.MISSING_CONFIG -> "Missing config.json"
                 ValidationError.MISSING_LANGUAGE_MODEL -> "Missing language model (GGUF)"
                 ValidationError.MISSING_VISION_MODEL -> "Missing vision model (mmproj GGUF)"
                 ValidationError.INVALID_REPO_FORMAT -> "Invalid repository format. Use: orgName/repository"
@@ -289,42 +340,49 @@ class ModelManager(private val context: Context) {
 
         emit(DownloadProgress(1, 0, totalSize, DownloadStatus.PENDING, "Downloading files..."))
 
-        // Step 2: Download config.json
-        val configPath = "${getModelsDirectory()}/${repo.replace("/", "_")}_config.json"
-        val configUrl = hfApiClient.getDownloadUrl(repo, files.configFile.path)
-        downloadFile(configUrl, configPath, files.configFile.size).collect { progress ->
-            val adjustedProgress = (progress.progress * 0.05).toInt() + 1 // 1-6%
-            emit(progress.copy(
-                progress = adjustedProgress,
-                message = "Downloading config.json..."
-            ))
-        }
-
-        // Step 3: Download language model
+        // Step 2: Download language model
         val languageFileName = files.languageFile.path.substringAfterLast("/")
         val languagePath = "${getModelsDirectory()}/${repo.replace("/", "_")}_$languageFileName"
         val languageUrl = hfApiClient.getDownloadUrl(repo, files.languageFile.path)
+        var lastLanguageProgress = -1
         downloadFile(languageUrl, languagePath, files.languageFile.size).collect { progress ->
-            val adjustedProgress = (progress.progress * 0.45).toInt() + 6 // 6-51%
-            emit(progress.copy(
-                progress = adjustedProgress,
-                message = "Downloading language model..."
-            ))
+            // Skip COMPLETED status from individual file - we'll emit overall COMPLETED at the end
+            if (progress.status == DownloadStatus.COMPLETED) return@collect
+
+            val adjustedProgress = (progress.progress * 0.5).toInt() + 1 // 1-51%
+            // Only emit if adjusted progress changed
+            if (adjustedProgress != lastLanguageProgress) {
+                emit(progress.copy(
+                    progress = adjustedProgress,
+                    message = "Downloading language model...",
+                    status = DownloadStatus.DOWNLOADING
+                ))
+                lastLanguageProgress = adjustedProgress
+            }
         }
 
-        // Step 4: Download vision model
+        // Step 3: Download vision model
         val visionFileName = files.visionFile.path.substringAfterLast("/")
         val visionPath = "${getModelsDirectory()}/${repo.replace("/", "_")}_$visionFileName"
         val visionUrl = hfApiClient.getDownloadUrl(repo, files.visionFile.path)
+        var lastVisionProgress = -1
         downloadFile(visionUrl, visionPath, files.visionFile.size).collect { progress ->
-            val adjustedProgress = (progress.progress * 0.45).toInt() + 51 // 51-96%
-            emit(progress.copy(
-                progress = adjustedProgress,
-                message = "Downloading vision model..."
-            ))
+            // Skip COMPLETED status from individual file - we'll emit overall COMPLETED at the end
+            if (progress.status == DownloadStatus.COMPLETED) return@collect
+
+            val adjustedProgress = (progress.progress * 0.5).toInt() + 51 // 51-100%
+            // Only emit if adjusted progress changed
+            if (adjustedProgress != lastVisionProgress) {
+                emit(progress.copy(
+                    progress = adjustedProgress,
+                    message = "Downloading vision model...",
+                    status = DownloadStatus.DOWNLOADING
+                ))
+                lastVisionProgress = adjustedProgress
+            }
         }
 
-        // Step 5: Save metadata
+        // Step 4: Save metadata
         emit(DownloadProgress(97, totalSize, totalSize, DownloadStatus.DOWNLOADING, "Saving metadata..."))
 
         val repoName = repo.substringAfterLast("/")
@@ -333,7 +391,7 @@ class ModelManager(private val context: Context) {
             hfRepo = repo,
             languageFile = languageFileName,
             visionFile = visionFileName,
-            configFile = "config.json",
+            configFile = null, // config.json not needed for GGUF models
             languageSize = files.languageFile.size,
             visionSize = files.visionFile.size
         )
@@ -341,7 +399,7 @@ class ModelManager(private val context: Context) {
         metadataManager.saveMetadata(metadata)
         Log.d(TAG, "Saved metadata for model: ${metadata.id}")
 
-        // Step 6: Set as default if no other models exist
+        // Step 5: Set as default if no other models exist
         if (metadataManager.getAllModels().size == 1) {
             metadataManager.setDefaultModel(metadata.id)
             Log.d(TAG, "Set as default model: ${metadata.id}")
@@ -371,6 +429,7 @@ class ModelManager(private val context: Context) {
             val buffer = ByteArray(8192)
             var bytesRead: Int
             var downloadedSize: Long = 0
+            var lastProgress = 0
 
             emit(DownloadProgress(0, 0, totalSize, DownloadStatus.DOWNLOADING))
 
@@ -386,7 +445,12 @@ class ModelManager(private val context: Context) {
                 } else {
                     0
                 }
-                emit(DownloadProgress(progress, downloadedSize, totalSize, DownloadStatus.DOWNLOADING))
+
+                // Only emit if progress percentage changed
+                if (progress != lastProgress) {
+                    emit(DownloadProgress(progress, downloadedSize, totalSize, DownloadStatus.DOWNLOADING))
+                    lastProgress = progress
+                }
             }
 
             outputStream.flush()
@@ -435,11 +499,9 @@ class ModelManager(private val context: Context) {
             val prefix = metadata.hfRepo.replace("/", "_")
             val modelsDir = getModelsDirectory()
 
-            val configFile = File(modelsDir, "${prefix}_config.json")
             val languageFile = File(modelsDir, "${prefix}_${metadata.languageFile}")
             val visionFile = File(modelsDir, "${prefix}_${metadata.visionFile}")
 
-            configFile.delete()
             languageFile.delete()
             visionFile.delete()
 
@@ -460,9 +522,19 @@ class ModelManager(private val context: Context) {
      */
     fun getHFModelPaths(modelId: String): Pair<String, String>? {
         val metadata = metadataManager.getModelById(modelId) ?: return null
-        val prefix = metadata.hfRepo.replace("/", "_")
         val modelsDir = getModelsDirectory()
 
+        // Special handling for legacy migrated model
+        if (modelId == "legacy-smolvlm2-256m") {
+            val mtmdModel = getMTMDModel(DEFAULT_MODEL_NAME)!!
+            return Pair(
+                getModelPath(mtmdModel.languageId),
+                getModelPath(mtmdModel.visionId)
+            )
+        }
+
+        // Standard HF model path
+        val prefix = metadata.hfRepo.replace("/", "_")
         val languagePath = File(modelsDir, "${prefix}_${metadata.languageFile}").absolutePath
         val visionPath = File(modelsDir, "${prefix}_${metadata.visionFile}").absolutePath
 

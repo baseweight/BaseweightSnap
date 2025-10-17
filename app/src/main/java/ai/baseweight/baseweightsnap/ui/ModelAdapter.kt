@@ -17,7 +17,8 @@ import java.util.*
 class ModelAdapter(
     private val onModelClick: (HFModelMetadata) -> Unit,
     private val onSetDefault: (HFModelMetadata) -> Unit,
-    private val onDelete: (HFModelMetadata) -> Unit
+    private val onDelete: (HFModelMetadata) -> Unit,
+    private val onCancelDownload: (HFModelMetadata) -> Unit
 ) : ListAdapter<HFModelMetadata, ModelAdapter.ModelViewHolder>(ModelDiffCallback()) {
 
     override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): ModelViewHolder {
@@ -49,21 +50,48 @@ class ModelAdapter(
             // Set repository
             tvRepository.text = model.hfRepo
 
-            // Set size
-            tvSize.text = "Size: ${model.formatSize()}"
-
-            // Set download date
-            val dateFormat = SimpleDateFormat("MMM dd, yyyy", Locale.getDefault())
-            tvDownloadDate.text = "Downloaded: ${dateFormat.format(Date(model.downloadDate))}"
+            // Handle different download states (handle null for backwards compatibility)
+            when (model.downloadState ?: ai.baseweight.baseweightsnap.models.DownloadState.COMPLETED) {
+                ai.baseweight.baseweightsnap.models.DownloadState.PENDING,
+                ai.baseweight.baseweightsnap.models.DownloadState.DOWNLOADING -> {
+                    tvSize.text = "Downloading: ${model.downloadProgress}%"
+                    tvDownloadDate.text = "Download in progress..."
+                    btnMoreOptions.isEnabled = true
+                    btnMoreOptions.setImageResource(android.R.drawable.ic_menu_close_clear_cancel)
+                    itemView.alpha = 0.7f
+                }
+                ai.baseweight.baseweightsnap.models.DownloadState.ERROR -> {
+                    tvSize.text = "Download failed"
+                    tvDownloadDate.text = "Error downloading model"
+                    btnMoreOptions.isEnabled = true
+                    btnMoreOptions.setImageResource(android.R.drawable.ic_menu_more)
+                    itemView.alpha = 1.0f
+                }
+                ai.baseweight.baseweightsnap.models.DownloadState.COMPLETED -> {
+                    tvSize.text = "Size: ${model.formatSize()}"
+                    val dateFormat = SimpleDateFormat("MMM dd, yyyy", Locale.getDefault())
+                    tvDownloadDate.text = "Downloaded: ${dateFormat.format(Date(model.downloadDate))}"
+                    btnMoreOptions.isEnabled = true
+                    btnMoreOptions.setImageResource(android.R.drawable.ic_menu_more)
+                    itemView.alpha = 1.0f
+                }
+            }
 
             // Click listener for the whole item
             itemView.setOnClickListener {
                 onModelClick(model)
             }
 
-            // More options menu
+            // More options menu - or cancel button for downloading models
             btnMoreOptions.setOnClickListener { view ->
-                showPopupMenu(view, model)
+                if (model.downloadState == ai.baseweight.baseweightsnap.models.DownloadState.PENDING ||
+                    model.downloadState == ai.baseweight.baseweightsnap.models.DownloadState.DOWNLOADING) {
+                    // Cancel download
+                    onCancelDownload(model)
+                } else {
+                    // Show options menu
+                    showPopupMenu(view, model)
+                }
             }
         }
 

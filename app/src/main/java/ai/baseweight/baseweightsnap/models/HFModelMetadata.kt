@@ -3,6 +3,16 @@ package ai.baseweight.baseweightsnap.models
 import java.util.UUID
 
 /**
+ * Download state for a model
+ */
+enum class DownloadState {
+    PENDING,      // Waiting to start
+    DOWNLOADING,  // Actively downloading
+    COMPLETED,    // Download finished
+    ERROR         // Download failed
+}
+
+/**
  * Metadata for a downloaded HuggingFace model
  */
 data class HFModelMetadata(
@@ -11,11 +21,13 @@ data class HFModelMetadata(
     val hfRepo: String,              // "orgName/repository"
     val languageFile: String,        // Filename of main GGUF
     val visionFile: String,          // Filename of mmproj GGUF
-    val configFile: String = "config.json",
+    val configFile: String? = null, // config.json not needed for GGUF models
     val downloadDate: Long = System.currentTimeMillis(),
     val isDefault: Boolean = false,
     val languageSize: Long,
-    val visionSize: Long
+    val visionSize: Long,
+    val downloadState: DownloadState? = DownloadState.COMPLETED,  // Nullable for backwards compatibility
+    val downloadProgress: Int = 100  // 0-100
 ) {
     val totalSize: Long get() = languageSize + visionSize
 
@@ -68,11 +80,11 @@ data class HFFile(
  * Required files for a VLM model
  */
 data class HFModelFiles(
-    val configFile: HFFile,
+    val configFile: HFFile?, // config.json not needed for GGUF models
     val languageFile: HFFile,
     val visionFile: HFFile
 ) {
-    val totalSize: Long get() = configFile.size + languageFile.size + visionFile.size
+    val totalSize: Long get() = (configFile?.size ?: 0) + languageFile.size + visionFile.size
 }
 
 /**
@@ -85,7 +97,6 @@ sealed class ValidationResult {
 
 enum class ValidationError {
     REPO_NOT_FOUND,
-    MISSING_CONFIG,
     MISSING_LANGUAGE_MODEL,
     MISSING_VISION_MODEL,
     NETWORK_ERROR,

@@ -68,7 +68,8 @@ class ModelDownloadService : Service() {
     private lateinit var modelManager: ModelManager
     private lateinit var notificationManager: NotificationManager
     private var downloadJob: Job? = null
-    private val serviceScope = CoroutineScope(Dispatchers.Main + SupervisorJob())
+    private var currentRepo: String? = null  // Track current download repo
+    private val serviceScope = CoroutineScope(Dispatchers.Default + SupervisorJob())
 
     override fun onCreate() {
         super.onCreate()
@@ -124,6 +125,9 @@ class ModelDownloadService : Service() {
         // Cancel any existing download
         downloadJob?.cancel()
 
+        // Track current repo
+        currentRepo = repo
+
         // Start foreground with initial notification
         val notification = buildNotification(
             progress = 0,
@@ -141,6 +145,7 @@ class ModelDownloadService : Service() {
                         onDownloadError(e.message ?: "Download failed")
                     }
                     .collect { progress ->
+                        Log.d(TAG, "Progress: ${progress.progress}% - ${progress.status} - ${progress.message}")
                         when (progress.status) {
                             DownloadStatus.PENDING -> {
                                 updateNotification(
@@ -148,6 +153,7 @@ class ModelDownloadService : Service() {
                                     message = progress.message,
                                     isIndeterminate = true
                                 )
+                                sendProgressBroadcast(repo, progress.progress, "PENDING")
                             }
                             DownloadStatus.DOWNLOADING -> {
                                 updateNotification(
@@ -155,11 +161,14 @@ class ModelDownloadService : Service() {
                                     message = progress.message,
                                     isIndeterminate = false
                                 )
+                                sendProgressBroadcast(repo, progress.progress, "DOWNLOADING")
                             }
                             DownloadStatus.COMPLETED -> {
+                                sendProgressBroadcast(repo, 100, "COMPLETED")
                                 onDownloadComplete(repo)
                             }
                             DownloadStatus.ERROR -> {
+                                sendProgressBroadcast(repo, 0, "ERROR")
                                 onDownloadError(progress.message)
                             }
                         }
@@ -174,6 +183,11 @@ class ModelDownloadService : Service() {
     private fun cancelDownload() {
         Log.d(TAG, "Download cancelled by user")
         downloadJob?.cancel()
+
+        // Send cancelled broadcast with current repo
+        currentRepo?.let { repo ->
+            sendProgressBroadcast(repo, 0, "CANCELLED")
+        }
 
         // Show cancellation notification
         val notification = buildNotification(
@@ -227,6 +241,17 @@ class ModelDownloadService : Service() {
             delay(3000)
             stopSelf()
         }
+    }
+
+    private fun sendProgressBroadcast(repo: String, progress: Int, status: String) {
+        val intent = Intent("ai.baseweight.baseweightsnap.DOWNLOAD_PROGRESS").apply {
+            setPackage(packageName)  // Make broadcast explicit for Android 8.0+
+            putExtra("repo", repo)
+            putExtra("progress", progress)
+            putExtra("status", status)
+        }
+        Log.d(TAG, "Sending broadcast: repo=$repo, progress=$progress, status=$status")
+        sendBroadcast(intent)
     }
 
     private fun updateNotification(

@@ -2,10 +2,16 @@ package ai.baseweight.baseweightsnap.ui
 
 import ai.baseweight.baseweightsnap.ModelManager
 import ai.baseweight.baseweightsnap.R
+import ai.baseweight.baseweightsnap.models.DownloadState
 import ai.baseweight.baseweightsnap.models.HFModelMetadata
 import ai.baseweight.baseweightsnap.models.ValidationResult
 import ai.baseweight.baseweightsnap.services.ModelDownloadService
 import android.app.AlertDialog
+import android.content.BroadcastReceiver
+import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
+import android.os.Build
 import android.os.Bundle
 import android.view.LayoutInflater
 import android.view.View
@@ -26,6 +32,21 @@ class ModelManagerActivity : AppCompatActivity() {
     private lateinit var rvModels: RecyclerView
     private lateinit var emptyStateView: View
     private lateinit var fabAddModel: FloatingActionButton
+
+    // Track pending downloads
+    private val pendingDownloads = mutableMapOf<String, HFModelMetadata>()
+
+    // Broadcast receiver for download progress
+    private val downloadProgressReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context, intent: Intent) {
+            val repo = intent.getStringExtra("repo") ?: return
+            val progress = intent.getIntExtra("progress", 0)
+            val status = intent.getStringExtra("status") ?: return
+
+            android.util.Log.d("ModelManagerActivity", "Received broadcast: repo=$repo, progress=$progress, status=$status")
+            updateDownloadProgress(repo, progress, status)
+        }
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -50,14 +71,19 @@ class ModelManagerActivity : AppCompatActivity() {
         // Setup RecyclerView
         modelAdapter = ModelAdapter(
             onModelClick = { model ->
-                // Could show details dialog in the future
-                Toast.makeText(this, "Model: ${model.name}", Toast.LENGTH_SHORT).show()
+                // Tapping a model switches to it (sets as default)
+                if (model.downloadState == DownloadState.COMPLETED || model.downloadState == null) {
+                    setModelAsDefault(model)
+                }
             },
             onSetDefault = { model ->
                 setModelAsDefault(model)
             },
             onDelete = { model ->
                 showDeleteConfirmation(model)
+            },
+            onCancelDownload = { model ->
+                cancelDownload(model)
             }
         )
 
@@ -77,12 +103,32 @@ class ModelManagerActivity : AppCompatActivity() {
 
     override fun onResume() {
         super.onResume()
+        // Register broadcast receiver for download progress
+        val filter = IntentFilter("ai.baseweight.baseweightsnap.DOWNLOAD_PROGRESS")
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            registerReceiver(downloadProgressReceiver, filter, RECEIVER_NOT_EXPORTED)
+        } else {
+            registerReceiver(downloadProgressReceiver, filter)
+        }
         // Refresh list when returning to activity
         loadModels()
     }
 
+    override fun onPause() {
+        super.onPause()
+        // Unregister broadcast receiver
+        try {
+            unregisterReceiver(downloadProgressReceiver)
+        } catch (e: Exception) {
+            // Already unregistered
+        }
+    }
+
     private fun loadModels() {
-        val models = modelManager.listDownloadedModels()
+        val models = modelManager.listDownloadedModels().toMutableList()
+
+        // Add pending downloads to the list
+        models.addAll(pendingDownloads.values)
 
         if (models.isEmpty()) {
             rvModels.visibility = View.GONE
@@ -92,6 +138,49 @@ class ModelManagerActivity : AppCompatActivity() {
             emptyStateView.visibility = View.GONE
             modelAdapter.submitList(models)
         }
+    }
+
+    private fun updateDownloadProgress(repo: String, progress: Int, status: String) {
+        val pending = pendingDownloads[repo]
+        if (pending != null) {
+            val updated = when (status) {
+                "DOWNLOADING" -> pending.copy(
+                    downloadState = DownloadState.DOWNLOADING,
+                    downloadProgress = progress
+                )
+                "COMPLETED" -> {
+                    // Remove from pending and refresh to show completed model
+                    pendingDownloads.remove(repo)
+                    loadModels()
+                    return
+                }
+                "CANCELLED" -> {
+                    // Remove from pending
+                    pendingDownloads.remove(repo)
+                    Toast.makeText(this, "Download cancelled", Toast.LENGTH_SHORT).show()
+                    loadModels()
+                    return
+                }
+                "ERROR" -> pending.copy(
+                    downloadState = DownloadState.ERROR,
+                    downloadProgress = 0
+                )
+                else -> pending
+            }
+            pendingDownloads[repo] = updated
+            loadModels()
+        }
+    }
+
+    private fun cancelDownload(model: HFModelMetadata) {
+        // Request service to cancel download
+        ModelDownloadService.cancelDownload(this)
+
+        // Remove from pending downloads
+        pendingDownloads.remove(model.hfRepo)
+        loadModels()
+
+        Toast.makeText(this, "Cancelling download...", Toast.LENGTH_SHORT).show()
     }
 
     private fun showAddModelDialog() {
@@ -135,60 +224,99 @@ class ModelManagerActivity : AppCompatActivity() {
     }
 
     private fun startDownload(repo: String) {
-        lifecycleScope.launch {
-            // Show validating message
-            Toast.makeText(
-                this@ModelManagerActivity,
-                R.string.validating_repository,
-                Toast.LENGTH_SHORT
-            ).show()
+        // Create a pending model entry
+        val pendingModel = HFModelMetadata(
+            id = "pending_$repo",
+            name = repo.substringAfter("/"),
+            hfRepo = repo,
+            languageFile = "",
+            visionFile = "",
+            languageSize = 0,
+            visionSize = 0,
+            downloadState = DownloadState.PENDING,
+            downloadProgress = 0
+        )
+        pendingDownloads[repo] = pendingModel
 
-            // Validate repository
-            val validation = modelManager.validateHFRepo(repo)
+        // Refresh UI to show pending model
+        loadModels()
 
-            when (validation) {
-                is ValidationResult.Valid -> {
-                    // Start download service
-                    ModelDownloadService.startDownload(this@ModelManagerActivity, repo)
+        // Start download service immediately (it will validate in background)
+        ModelDownloadService.startDownload(this@ModelManagerActivity, repo)
 
-                    Toast.makeText(
-                        this@ModelManagerActivity,
-                        R.string.downloading_model,
-                        Toast.LENGTH_SHORT
-                    ).show()
+        Toast.makeText(
+            this@ModelManagerActivity,
+            "Download started",
+            Toast.LENGTH_SHORT
+        ).show()
 
-                    // Close activity to show notification
-                    finish()
-                }
-                is ValidationResult.Invalid -> {
-                    val errorMessage = when (validation.error) {
-                        ai.baseweight.baseweightsnap.models.ValidationError.REPO_NOT_FOUND ->
-                            "Repository not found"
-                        ai.baseweight.baseweightsnap.models.ValidationError.MISSING_CONFIG ->
-                            "Missing config.json"
-                        ai.baseweight.baseweightsnap.models.ValidationError.MISSING_LANGUAGE_MODEL ->
-                            "Missing language model (GGUF file)"
-                        ai.baseweight.baseweightsnap.models.ValidationError.MISSING_VISION_MODEL ->
-                            "Missing vision model (mmproj GGUF)"
-                        ai.baseweight.baseweightsnap.models.ValidationError.INVALID_REPO_FORMAT ->
-                            "Invalid repository format"
-                        else -> "Validation failed"
-                    }
-
-                    AlertDialog.Builder(this@ModelManagerActivity)
-                        .setTitle("Validation Failed")
-                        .setMessage(errorMessage)
-                        .setPositiveButton("OK", null)
-                        .show()
-                }
-            }
-        }
+        // Don't finish() - stay on the Model Manager screen
+        // The download happens in background service
+        // Progress will be shown in the model list
     }
 
     private fun setModelAsDefault(model: HFModelMetadata) {
-        modelManager.setDefaultModel(model.id)
-        Toast.makeText(this, R.string.model_set_as_default, Toast.LENGTH_SHORT).show()
-        loadModels() // Refresh to update UI
+        lifecycleScope.launch {
+            try {
+                // Get the MTMD singleton
+                val vlmRunner = ai.baseweight.baseweightsnap.MTMD_Android.instance(this@ModelManagerActivity)
+
+                // Show loading message
+                Toast.makeText(
+                    this@ModelManagerActivity,
+                    "Switching to ${model.name}...",
+                    Toast.LENGTH_SHORT
+                ).show()
+
+                // Load the new model in IO context (just like SplashActivity does)
+                val success = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                    // Get the model paths
+                    val paths = modelManager.getHFModelPaths(model.id)
+                    if (paths == null) {
+                        android.util.Log.e("ModelManagerActivity", "Failed to get paths for model: ${model.id}")
+                        return@withContext false
+                    }
+
+                    val (languagePath, visionPath) = paths
+
+                    // Verify files exist
+                    if (!java.io.File(languagePath).exists() || !java.io.File(visionPath).exists()) {
+                        android.util.Log.e("ModelManagerActivity", "Model files not found: $languagePath or $visionPath")
+                        return@withContext false
+                    }
+
+                    // Unload current models first
+                    vlmRunner.unloadModels()
+
+                    // Load the new models
+                    vlmRunner.loadModels(languagePath, visionPath)
+                }
+
+                if (success) {
+                    // Set as default in metadata
+                    modelManager.setDefaultModel(model.id)
+                    Toast.makeText(
+                        this@ModelManagerActivity,
+                        "Switched to ${model.name}",
+                        Toast.LENGTH_SHORT
+                    ).show()
+                    loadModels() // Refresh to update UI
+                } else {
+                    Toast.makeText(
+                        this@ModelManagerActivity,
+                        "Failed to load model",
+                        Toast.LENGTH_SHORT
+                    ).show()
+                }
+            } catch (e: Exception) {
+                android.util.Log.e("ModelManagerActivity", "Error switching model: ${e.message}", e)
+                Toast.makeText(
+                    this@ModelManagerActivity,
+                    "Error switching model: ${e.message}",
+                    Toast.LENGTH_SHORT
+                ).show()
+            }
+        }
     }
 
     private fun showDeleteConfirmation(model: HFModelMetadata) {
