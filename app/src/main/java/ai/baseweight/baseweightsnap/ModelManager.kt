@@ -1,5 +1,6 @@
 package ai.baseweight.baseweightsnap
 
+import ai.baseweight.baseweightsnap.models.*
 import android.content.Context
 import android.os.Environment
 import android.util.Log
@@ -7,6 +8,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOn
+import kotlinx.coroutines.withContext
 import java.io.File
 import java.io.FileOutputStream
 import java.net.HttpURLConnection
@@ -48,11 +50,16 @@ class ModelManager(private val context: Context) {
         private const val TAG = "ModelManager"
         private const val MODELS_DIR = "models"
         const val DEFAULT_MODEL_NAME = "SmolVLM2-256M-VidInstruct"
-        
-        // HuggingFace URLs for the models
+        const val DEFAULT_HF_REPO = "ggml-org/SmolVLM2-256M-Video-Instruct-GGUF"
+
+        // HuggingFace URLs for the models (legacy)
         private const val LANGUAGE_MODEL_URL = "https://huggingface.co/ggml-org/SmolVLM2-256M-Video-Instruct-GGUF/resolve/main/SmolVLM2-256M-Video-Instruct-Q8_0.gguf"
         private const val VISION_MODEL_URL = "https://huggingface.co/ggml-org/SmolVLM2-256M-Video-Instruct-GGUF/resolve/main/mmproj-SmolVLM2-256M-Video-Instruct-Q8_0.gguf"
     }
+
+    // HuggingFace integration
+    private val hfApiClient = HuggingFaceApiClient()
+    private val metadataManager = ModelMetadataManager(context)
 
     // List of available models - simplified to just one model pair
     val availableModels = listOf(
@@ -107,7 +114,7 @@ class ModelManager(private val context: Context) {
 
     // Get the local path for a model
     fun getModelPath(modelId: String): String {
-        val model = getModel(modelId) ?: throw IllegalArgumentException("Invalid model ID: $modelId")
+        getModel(modelId) ?: throw IllegalArgumentException("Invalid model ID: $modelId")
         return "${getModelsDirectory().absolutePath}/${modelId}.gguf"
     }
 
@@ -121,12 +128,12 @@ class ModelManager(private val context: Context) {
         val mtmdModel = getMTMDModel(modelName) ?: throw IllegalArgumentException("Invalid model name: $modelName")
         
         // Download language model first
-        downloadModel(mtmdModel.languageId, LANGUAGE_MODEL_URL).collect { progress ->
+        downloadModel(mtmdModel.languageId, LANGUAGE_MODEL_URL).collect { _ ->
             // Progress is already emitted by downloadModel
         }
-        
+
         // Download vision model
-        downloadModel(mtmdModel.visionId, VISION_MODEL_URL).collect { progress ->
+        downloadModel(mtmdModel.visionId, VISION_MODEL_URL).collect { _ ->
             // Progress is already emitted by downloadModel
         }
         
@@ -242,4 +249,230 @@ class ModelManager(private val context: Context) {
             }
         }
     }.flowOn(Dispatchers.IO)
-} 
+
+    // ========== NEW: HuggingFace Model Management ==========
+
+    /**
+     * Validate a HuggingFace repository for VLM compatibility
+     */
+    suspend fun validateHFRepo(repo: String): ValidationResult = withContext(Dispatchers.IO) {
+        Log.d(TAG, "Validating HF repository: $repo")
+        hfApiClient.validateModel(repo)
+    }
+
+    /**
+     * Download a model from HuggingFace repository
+     * Returns the metadata of the downloaded model
+     */
+    suspend fun downloadFromHuggingFace(repo: String): Flow<DownloadProgress> = flow {
+        Log.d(TAG, "Starting download from HF repo: $repo")
+
+        // Step 1: Validate repository
+        emit(DownloadProgress(0, 0, 0, DownloadStatus.PENDING, "Validating repository..."))
+        val validation = hfApiClient.validateModel(repo)
+
+        if (validation is ValidationResult.Invalid) {
+            val errorMsg = when (validation.error) {
+                ValidationError.REPO_NOT_FOUND -> "Repository not found"
+                ValidationError.MISSING_CONFIG -> "Missing config.json"
+                ValidationError.MISSING_LANGUAGE_MODEL -> "Missing language model (GGUF)"
+                ValidationError.MISSING_VISION_MODEL -> "Missing vision model (mmproj GGUF)"
+                ValidationError.INVALID_REPO_FORMAT -> "Invalid repository format. Use: orgName/repository"
+                else -> "Validation failed"
+            }
+            emit(DownloadProgress(0, 0, 0, DownloadStatus.ERROR, errorMsg))
+            return@flow
+        }
+
+        val files = (validation as ValidationResult.Valid).files
+        val totalSize = files.totalSize
+
+        emit(DownloadProgress(1, 0, totalSize, DownloadStatus.PENDING, "Downloading files..."))
+
+        // Step 2: Download config.json
+        val configPath = "${getModelsDirectory()}/${repo.replace("/", "_")}_config.json"
+        val configUrl = hfApiClient.getDownloadUrl(repo, files.configFile.path)
+        downloadFile(configUrl, configPath, files.configFile.size).collect { progress ->
+            val adjustedProgress = (progress.progress * 0.05).toInt() + 1 // 1-6%
+            emit(progress.copy(
+                progress = adjustedProgress,
+                message = "Downloading config.json..."
+            ))
+        }
+
+        // Step 3: Download language model
+        val languageFileName = files.languageFile.path.substringAfterLast("/")
+        val languagePath = "${getModelsDirectory()}/${repo.replace("/", "_")}_$languageFileName"
+        val languageUrl = hfApiClient.getDownloadUrl(repo, files.languageFile.path)
+        downloadFile(languageUrl, languagePath, files.languageFile.size).collect { progress ->
+            val adjustedProgress = (progress.progress * 0.45).toInt() + 6 // 6-51%
+            emit(progress.copy(
+                progress = adjustedProgress,
+                message = "Downloading language model..."
+            ))
+        }
+
+        // Step 4: Download vision model
+        val visionFileName = files.visionFile.path.substringAfterLast("/")
+        val visionPath = "${getModelsDirectory()}/${repo.replace("/", "_")}_$visionFileName"
+        val visionUrl = hfApiClient.getDownloadUrl(repo, files.visionFile.path)
+        downloadFile(visionUrl, visionPath, files.visionFile.size).collect { progress ->
+            val adjustedProgress = (progress.progress * 0.45).toInt() + 51 // 51-96%
+            emit(progress.copy(
+                progress = adjustedProgress,
+                message = "Downloading vision model..."
+            ))
+        }
+
+        // Step 5: Save metadata
+        emit(DownloadProgress(97, totalSize, totalSize, DownloadStatus.DOWNLOADING, "Saving metadata..."))
+
+        val repoName = repo.substringAfterLast("/")
+        val metadata = HFModelMetadata(
+            name = repoName,
+            hfRepo = repo,
+            languageFile = languageFileName,
+            visionFile = visionFileName,
+            configFile = "config.json",
+            languageSize = files.languageFile.size,
+            visionSize = files.visionFile.size
+        )
+
+        metadataManager.saveMetadata(metadata)
+        Log.d(TAG, "Saved metadata for model: ${metadata.id}")
+
+        // Step 6: Set as default if no other models exist
+        if (metadataManager.getAllModels().size == 1) {
+            metadataManager.setDefaultModel(metadata.id)
+            Log.d(TAG, "Set as default model: ${metadata.id}")
+        }
+
+        emit(DownloadProgress(100, totalSize, totalSize, DownloadStatus.COMPLETED, "Download complete!"))
+    }.flowOn(Dispatchers.IO)
+
+    /**
+     * Download a single file with progress tracking
+     */
+    private fun downloadFile(url: String, destPath: String, expectedSize: Long): Flow<DownloadProgress> = flow {
+        val file = File(destPath)
+        file.parentFile?.mkdirs()
+
+        try {
+            val connection = URL(url).openConnection() as HttpURLConnection
+            connection.connect()
+
+            if (connection.responseCode != HttpURLConnection.HTTP_OK) {
+                throw Exception("HTTP ${connection.responseCode}: ${connection.responseMessage}")
+            }
+
+            val totalSize = connection.contentLength.toLong()
+            val inputStream = connection.inputStream
+            val outputStream = FileOutputStream(file)
+            val buffer = ByteArray(8192)
+            var bytesRead: Int
+            var downloadedSize: Long = 0
+
+            emit(DownloadProgress(0, 0, totalSize, DownloadStatus.DOWNLOADING))
+
+            while (true) {
+                bytesRead = inputStream.read(buffer)
+                if (bytesRead == -1) break
+
+                outputStream.write(buffer, 0, bytesRead)
+                downloadedSize += bytesRead
+
+                val progress = if (totalSize > 0) {
+                    (downloadedSize * 100 / totalSize).toInt()
+                } else {
+                    0
+                }
+                emit(DownloadProgress(progress, downloadedSize, totalSize, DownloadStatus.DOWNLOADING))
+            }
+
+            outputStream.flush()
+            outputStream.close()
+            inputStream.close()
+
+            emit(DownloadProgress(100, totalSize, totalSize, DownloadStatus.COMPLETED))
+
+        } catch (e: Exception) {
+            Log.e(TAG, "Error downloading file: ${e.message}", e)
+            if (file.exists()) file.delete()
+            emit(DownloadProgress(0, 0, expectedSize, DownloadStatus.ERROR, e.message ?: "Download failed"))
+        }
+    }.flowOn(Dispatchers.IO)
+
+    /**
+     * Get all downloaded models (from metadata)
+     */
+    fun listDownloadedModels(): List<HFModelMetadata> {
+        return metadataManager.getAllModels()
+    }
+
+    /**
+     * Get the default model
+     */
+    fun getDefaultModel(): HFModelMetadata? {
+        return metadataManager.getDefaultModel()
+    }
+
+    /**
+     * Set a model as default
+     */
+    fun setDefaultModel(modelId: String) {
+        metadataManager.setDefaultModel(modelId)
+    }
+
+    /**
+     * Delete a model and its files
+     */
+    suspend fun deleteModel(modelId: String): Result<Unit> = withContext(Dispatchers.IO) {
+        return@withContext try {
+            val metadata = metadataManager.getModelById(modelId)
+                ?: return@withContext Result.failure(Exception("Model not found: $modelId"))
+
+            // Delete files
+            val prefix = metadata.hfRepo.replace("/", "_")
+            val modelsDir = getModelsDirectory()
+
+            val configFile = File(modelsDir, "${prefix}_config.json")
+            val languageFile = File(modelsDir, "${prefix}_${metadata.languageFile}")
+            val visionFile = File(modelsDir, "${prefix}_${metadata.visionFile}")
+
+            configFile.delete()
+            languageFile.delete()
+            visionFile.delete()
+
+            // Delete metadata
+            metadataManager.deleteModel(modelId)
+
+            Log.d(TAG, "Deleted model: $modelId")
+            Result.success(Unit)
+        } catch (e: Exception) {
+            Log.e(TAG, "Error deleting model: ${e.message}", e)
+            Result.failure(e)
+        }
+    }
+
+    /**
+     * Get file paths for a HF model
+     * Returns Pair(languagePath, visionPath)
+     */
+    fun getHFModelPaths(modelId: String): Pair<String, String>? {
+        val metadata = metadataManager.getModelById(modelId) ?: return null
+        val prefix = metadata.hfRepo.replace("/", "_")
+        val modelsDir = getModelsDirectory()
+
+        val languagePath = File(modelsDir, "${prefix}_${metadata.languageFile}").absolutePath
+        val visionPath = File(modelsDir, "${prefix}_${metadata.visionFile}").absolutePath
+
+        return Pair(languagePath, visionPath)
+    }
+
+    /**
+     * Check if any HF models are downloaded
+     */
+    fun hasDownloadedModels(): Boolean {
+        return metadataManager.hasModels()
+    }
+}
