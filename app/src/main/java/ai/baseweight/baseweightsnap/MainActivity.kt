@@ -52,7 +52,7 @@ class MainActivity : AppCompatActivity() {
     private var currentCameraSelector = CameraSelector.DEFAULT_BACK_CAMERA
     private val scope = CoroutineScope(Dispatchers.Main)
     private var generationJob: Job? = null
-    private val vlmRunner: MTMD_Android = MTMD_Android.instance()
+    private val vlmRunner: MTMD_Android by lazy { MTMD_Android.instance(this) }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -472,10 +472,5 @@ class MainActivity : AppCompatActivity() {
         private const val REQUEST_CODE_PERMISSIONS = 10
         private val REQUIRED_PERMISSIONS = arrayOf(Manifest.permission.CAMERA)
         private const val REQUEST_IMAGE_PICK = 201
-
-        // Used to load the 'baseweightsnap' library on application startup.
-        init {
-            System.loadLibrary("baseweightsnap")
-        }
     }
 }

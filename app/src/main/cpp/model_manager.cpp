@@ -1,5 +1,6 @@
 #include "common.h"
 #include "mtmd.h"
+#include "mtmd-helper.h"
 #include "clip.h"
 #include "model_manager.h"
 #include <android/log.h>
@@ -12,6 +13,7 @@ std::atomic<bool> g_should_stop{false};
 // Initialize static member
 JavaVM* ModelManager::javaVM = nullptr;
 
+#undef TAG
 #define TAG "model_manager.cpp"
 #define LOGi(...) __android_log_print(ANDROID_LOG_INFO, TAG, __VA_ARGS__)
 #define LOGe(...) __android_log_print(ANDROID_LOG_ERROR, TAG, __VA_ARGS__)
@@ -34,7 +36,7 @@ void ModelManager::cleanup() {
         lctx = nullptr;
     }
     if (model) {
-        llama_free_model(model);
+        llama_model_free(model);
         model = nullptr;
     }
     vocab = nullptr;
@@ -138,7 +140,7 @@ bool ModelManager::initializeSampler() {
 }
 
 bool ModelManager::processImage(const char* image_path) {
-    mtmd::bitmap bmp(mtmd_helper_bitmap_init_from_file(image_path));
+    mtmd::bitmap bmp(mtmd_helper_bitmap_init_from_file(ctx_vision.get(), image_path));
     if (!bmp.ptr) {
         LOGe("Failed to load image from %s", image_path);
         return false;
@@ -411,16 +413,25 @@ int32_t ModelManager::evalChunksWithProgress(mtmd_context * ctx,
 
     // Process chunks sequentially
     for (size_t i = 0; i < n_chunks; i++) {
+        LOGi("Processing chunk %zu/%zu", i+1, n_chunks);
         bool chunk_logits_last = (i == n_chunks - 1) && logits_last;
         auto chunk = mtmd_input_chunks_get(chunks, i);
 
-        int32_t res = mtmd_helper_eval_chunk_single(ctx, lctx, chunk, n_past, seq_id, 
-                                                  n_batch, chunk_logits_last, &n_past);
+        // Log chunk type for debugging
+        auto chunk_type = mtmd_input_chunk_get_type(chunk);
+        const char* type_name = (chunk_type == MTMD_INPUT_CHUNK_TYPE_TEXT) ? "TEXT" :
+                               (chunk_type == MTMD_INPUT_CHUNK_TYPE_IMAGE) ? "IMAGE" :
+                               (chunk_type == MTMD_INPUT_CHUNK_TYPE_AUDIO) ? "AUDIO" : "UNKNOWN";
+        LOGi("Chunk %zu type: %s", i+1, type_name);
+
+        int32_t res = mtmd_helper_eval_chunk_single(ctx, lctx, chunk, n_past, seq_id,
+                                                     n_batch, chunk_logits_last, &n_past);
         if (res != 0) {
             LOGe("failed to eval chunk %zu\n", i);
             return res;
         }
         *new_n_past = n_past;
+        LOGi("Completed chunk %zu/%zu", i+1, n_chunks);
 
     }
 

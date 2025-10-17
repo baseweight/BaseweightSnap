@@ -23,7 +23,7 @@ import java.io.File
 class SplashActivity : AppCompatActivity() {
     private lateinit var binding: ActivitySplashBinding
     private val scope = CoroutineScope(Dispatchers.Main)
-    private val vlmRunner: MTMD_Android = MTMD_Android.instance()
+    private val vlmRunner: MTMD_Android by lazy { MTMD_Android.instance(this) }
     private val modelManager: ModelManager by lazy { ModelManager(this) }
 
     private val DEFAULT_ERROR_MESSAGE = "An unexpected error occurred. Please try reinstalling the app."
