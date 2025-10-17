@@ -39,6 +39,12 @@
             android:screenOrientation="portrait"
             android:theme="@style/Theme.BaseweightSnap.NoActionBar" />
 
+        <activity
+            android:name=".ui.ModelManagerActivity"
+            android:exported="false"
+            android:screenOrientation="portrait"
+            android:theme="@style/Theme.BaseweightSnap" />
+
         <!-- Model Download Service -->
         <service
             android:name=".services.ModelDownloadService"
