@@ -76,7 +76,86 @@ class HuggingFaceApiClient {
     }
 
     /**
-     * Find and validate required files for a VLM model
+     * Get model manifest using llama.cpp API
+     * This detects unified GGUF files and returns file information
+     */
+    suspend fun getManifest(repo: String, tag: String = "latest"): Result<HFManifest> {
+        return try {
+            // Use llama.cpp manifest endpoint
+            val url = "$BASE_URL/v2/$repo/manifests/$tag"
+            Log.d(TAG, "Fetching manifest from: $url")
+            
+            val response = makeManifestRequest(url)
+            val json = JSONObject(response)
+            
+            val ggufFile = json.optJSONObject("ggufFile")
+                ?.optString("rfilename")
+                ?: throw Exception("No ggufFile found in manifest")
+            
+            val mmprojFile = json.optJSONObject("mmprojFile")
+                ?.optString("rfilename")
+            
+            val manifest = HFManifest(
+                ggufFile = ggufFile,
+                mmprojFile = mmprojFile
+            )
+            
+            Log.d(TAG, "Manifest: ggufFile=$ggufFile, mmprojFile=$mmprojFile, unified=${manifest.isUnified()}, hasVision=${manifest.hasVision()}")
+            Result.success(manifest)
+        } catch (e: Exception) {
+            Log.e(TAG, "Error fetching manifest for $repo", e)
+            Result.failure(e)
+        }
+    }
+
+    /**
+     * Find required files using the manifest API (new approach)
+     * This properly handles unified GGUF files like Gemma 3
+     */
+    suspend fun findRequiredFilesV2(repo: String): Result<HFModelFiles> {
+        // First try the manifest API
+        val manifestResult = getManifest(repo)
+        if (manifestResult.isSuccess) {
+            val manifest = manifestResult.getOrNull()!!
+            
+            // Get file info from regular API
+            val filesResult = listFiles(repo)
+            if (filesResult.isFailure) {
+                return Result.failure(filesResult.exceptionOrNull()!!)
+            }
+            
+            val files = filesResult.getOrNull()!!
+            
+            // Find the language model file
+            val languageFile = files.find { it.path == manifest.ggufFile }
+                ?: return Result.failure(Exception("Language model file not found: ${manifest.ggufFile}"))
+            
+            // Handle vision file (may be same as language file for unified models)
+            val visionFile = if (manifest.hasVision()) {
+                files.find { it.path == manifest.mmprojFile }
+                    ?: return Result.failure(Exception("Vision model file not found: ${manifest.mmprojFile}"))
+            } else {
+                null
+            }
+            
+            val modelFiles = HFModelFiles(
+                configFile = null,
+                languageFile = languageFile,
+                visionFile = visionFile,
+                isUnified = manifest.isUnified()
+            )
+            
+            Log.d(TAG, "Found files via manifest: language=${languageFile.path}, vision=${visionFile?.path}, unified=${manifest.isUnified()}")
+            return Result.success(modelFiles)
+        }
+        
+        // Fallback to old method if manifest API fails
+        Log.w(TAG, "Manifest API failed, falling back to file scanning")
+        return findRequiredFiles(repo)
+    }
+
+    /**
+     * Find and validate required files for a VLM model (legacy method)
      */
     suspend fun findRequiredFiles(repo: String): Result<HFModelFiles> {
         val filesResult = listFiles(repo)
@@ -114,7 +193,8 @@ class HuggingFaceApiClient {
         val modelFiles = HFModelFiles(
             configFile = null, // config.json not needed for GGUF models
             languageFile = languageFile,
-            visionFile = visionFile
+            visionFile = visionFile,
+            isUnified = false
         )
 
         Log.d(TAG, "Found required files: language=${languageFile.path}, vision=${visionFile.path}")
@@ -122,7 +202,41 @@ class HuggingFaceApiClient {
     }
 
     /**
-     * Validate a HuggingFace repository for VLM compatibility
+     * Validate model using manifest API (supports unified GGUF)
+     */
+    suspend fun validateModelV2(repo: String): ValidationResult {
+        // Validate repo format
+        if (!repo.matches(Regex("^[\\w.-]+/[\\w.-]+$"))) {
+            Log.e(TAG, "Invalid repo format: $repo")
+            return ValidationResult.Invalid(ValidationError.INVALID_REPO_FORMAT)
+        }
+
+        // Check if repo exists
+        val repoInfoResult = getRepoInfo(repo)
+        if (repoInfoResult.isFailure) {
+            Log.e(TAG, "Repository not found: $repo")
+            return ValidationResult.Invalid(ValidationError.REPO_NOT_FOUND)
+        }
+
+        // Find required files using manifest API
+        val filesResult = findRequiredFilesV2(repo)
+        if (filesResult.isFailure) {
+            val error = when {
+                filesResult.exceptionOrNull()?.message?.contains("vision") == true ->
+                    ValidationError.MISSING_VISION_MODEL
+                filesResult.exceptionOrNull()?.message?.contains("language") == true ->
+                    ValidationError.MISSING_LANGUAGE_MODEL
+                else -> ValidationError.NETWORK_ERROR
+            }
+            return ValidationResult.Invalid(error)
+        }
+
+        val files = filesResult.getOrNull()!!
+        return ValidationResult.Valid(files)
+    }
+
+    /**
+     * Validate a HuggingFace repository for VLM compatibility (legacy method)
      */
     suspend fun validateModel(repo: String): ValidationResult {
         // Validate repo format
@@ -161,6 +275,31 @@ class HuggingFaceApiClient {
     fun getDownloadUrl(repo: String, filename: String, revision: String = "main"): String {
         val encodedFilename = URLEncoder.encode(filename, "UTF-8").replace("+", "%20")
         return "$BASE_URL/$repo/resolve/$revision/$encodedFilename"
+    }
+
+    /**
+     * Make HTTP request with llama-cpp User-Agent (required for manifest API)
+     */
+    private suspend fun makeManifestRequest(url: String): String = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+        val connection = URL(url).openConnection() as HttpURLConnection
+        try {
+            connection.requestMethod = "GET"
+            connection.connectTimeout = TIMEOUT_MS
+            connection.readTimeout = TIMEOUT_MS
+            // Critical: Use llama-cpp User-Agent to get manifest with ggufFile/mmprojFile
+            connection.setRequestProperty("User-Agent", "llama-cpp")
+            connection.setRequestProperty("Accept", "application/json")
+
+            val responseCode = connection.responseCode
+            if (responseCode != HttpURLConnection.HTTP_OK) {
+                val errorStream = connection.errorStream?.bufferedReader()?.use { it.readText() }
+                throw Exception("HTTP $responseCode: ${connection.responseMessage}${errorStream?.let { "\n$it" } ?: ""}")
+            }
+
+            return@withContext connection.inputStream.bufferedReader().use { it.readText() }
+        } finally {
+            connection.disconnect()
+        }
     }
 
     /**

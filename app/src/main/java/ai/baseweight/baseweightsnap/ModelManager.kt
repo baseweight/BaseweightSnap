@@ -305,23 +305,23 @@ class ModelManager(private val context: Context) {
     // ========== NEW: HuggingFace Model Management ==========
 
     /**
-     * Validate a HuggingFace repository for VLM compatibility
+     * Validate a HuggingFace repository for VLM compatibility (uses manifest API)
      */
     suspend fun validateHFRepo(repo: String): ValidationResult = withContext(Dispatchers.IO) {
         Log.d(TAG, "Validating HF repository: $repo")
-        hfApiClient.validateModel(repo)
+        hfApiClient.validateModelV2(repo)
     }
 
     /**
      * Download a model from HuggingFace repository
-     * Returns the metadata of the downloaded model
+     * Supports unified GGUF files (like Gemma 3) and separate files
      */
     suspend fun downloadFromHuggingFace(repo: String): Flow<DownloadProgress> = flow {
         Log.d(TAG, "Starting download from HF repo: $repo")
 
-        // Step 1: Validate repository
+        // Step 1: Validate repository using V2 API (manifest-based)
         emit(DownloadProgress(0, 0, 0, DownloadStatus.PENDING, "Validating repository..."))
-        val validation = hfApiClient.validateModel(repo)
+        val validation = hfApiClient.validateModelV2(repo)
 
         if (validation is ValidationResult.Invalid) {
             val errorMsg = when (validation.error) {
@@ -337,7 +337,9 @@ class ModelManager(private val context: Context) {
 
         val files = (validation as ValidationResult.Valid).files
         val totalSize = files.totalSize
+        val isUnified = files.isUnified
 
+        Log.d(TAG, "Model is ${if (isUnified) "unified" else "separate"} GGUF")
         emit(DownloadProgress(1, 0, totalSize, DownloadStatus.PENDING, "Downloading files..."))
 
         // Step 2: Download language model
@@ -349,37 +351,52 @@ class ModelManager(private val context: Context) {
             // Skip COMPLETED status from individual file - we'll emit overall COMPLETED at the end
             if (progress.status == DownloadStatus.COMPLETED) return@collect
 
-            val adjustedProgress = (progress.progress * 0.5).toInt() + 1 // 1-51%
-            // Only emit if adjusted progress changed
+            val adjustedProgress = if (isUnified) {
+                // For unified models, this is 1-100%
+                progress.progress.coerceIn(1, 99)
+            } else {
+                // For separate models, this is 1-50%
+                (progress.progress * 0.5).toInt() + 1
+            }
+            
             if (adjustedProgress != lastLanguageProgress) {
                 emit(progress.copy(
                     progress = adjustedProgress,
-                    message = "Downloading language model...",
+                    message = if (isUnified) "Downloading unified model..." else "Downloading language model...",
                     status = DownloadStatus.DOWNLOADING
                 ))
                 lastLanguageProgress = adjustedProgress
             }
         }
 
-        // Step 3: Download vision model
-        val visionFileName = files.visionFile.path.substringAfterLast("/")
-        val visionPath = "${getModelsDirectory()}/${repo.replace("/", "_")}_$visionFileName"
-        val visionUrl = hfApiClient.getDownloadUrl(repo, files.visionFile.path)
-        var lastVisionProgress = -1
-        downloadFile(visionUrl, visionPath, files.visionFile.size).collect { progress ->
-            // Skip COMPLETED status from individual file - we'll emit overall COMPLETED at the end
-            if (progress.status == DownloadStatus.COMPLETED) return@collect
+        // Step 3: Download vision model (only if separate)
+        val visionFileName: String
+        val visionPath: String
+        
+        if (!isUnified && files.visionFile != null) {
+            visionFileName = files.visionFile.path.substringAfterLast("/")
+            visionPath = "${getModelsDirectory()}/${repo.replace("/", "_")}_$visionFileName"
+            val visionUrl = hfApiClient.getDownloadUrl(repo, files.visionFile.path)
+            var lastVisionProgress = -1
+            downloadFile(visionUrl, visionPath, files.visionFile.size).collect { progress ->
+                // Skip COMPLETED status from individual file - we'll emit overall COMPLETED at the end
+                if (progress.status == DownloadStatus.COMPLETED) return@collect
 
-            val adjustedProgress = (progress.progress * 0.5).toInt() + 51 // 51-100%
-            // Only emit if adjusted progress changed
-            if (adjustedProgress != lastVisionProgress) {
-                emit(progress.copy(
-                    progress = adjustedProgress,
-                    message = "Downloading vision model...",
-                    status = DownloadStatus.DOWNLOADING
-                ))
-                lastVisionProgress = adjustedProgress
+                val adjustedProgress = (progress.progress * 0.5).toInt() + 51 // 51-100%
+                if (adjustedProgress != lastVisionProgress) {
+                    emit(progress.copy(
+                        progress = adjustedProgress,
+                        message = "Downloading vision model...",
+                        status = DownloadStatus.DOWNLOADING
+                    ))
+                    lastVisionProgress = adjustedProgress
+                }
             }
+        } else {
+            // For unified models, vision and language are the same file
+            visionFileName = languageFileName
+            visionPath = languagePath
+            Log.d(TAG, "Unified model detected - using same file for vision and language")
         }
 
         // Step 4: Save metadata
@@ -391,13 +408,14 @@ class ModelManager(private val context: Context) {
             hfRepo = repo,
             languageFile = languageFileName,
             visionFile = visionFileName,
-            configFile = null, // config.json not needed for GGUF models
+            configFile = null,
             languageSize = files.languageFile.size,
-            visionSize = files.visionFile.size
+            visionSize = if (isUnified) files.languageFile.size else (files.visionFile?.size ?: 0),
+            isUnified = isUnified
         )
 
         metadataManager.saveMetadata(metadata)
-        Log.d(TAG, "Saved metadata for model: ${metadata.id}")
+        Log.d(TAG, "Saved metadata for model: ${metadata.id} (unified=${isUnified})")
 
         // Step 5: Set as default if no other models exist
         if (metadataManager.getAllModels().size == 1) {
@@ -500,15 +518,18 @@ class ModelManager(private val context: Context) {
             val modelsDir = getModelsDirectory()
 
             val languageFile = File(modelsDir, "${prefix}_${metadata.languageFile}")
-            val visionFile = File(modelsDir, "${prefix}_${metadata.visionFile}")
-
             languageFile.delete()
-            visionFile.delete()
+            
+            // For unified models, only delete once (since it's the same file)
+            if (!metadata.isUnified) {
+                val visionFile = File(modelsDir, "${prefix}_${metadata.visionFile}")
+                visionFile.delete()
+            }
 
             // Delete metadata
             metadataManager.deleteModel(modelId)
 
-            Log.d(TAG, "Deleted model: $modelId")
+            Log.d(TAG, "Deleted model: $modelId (unified=${metadata.isUnified})")
             Result.success(Unit)
         } catch (e: Exception) {
             Log.e(TAG, "Error deleting model: ${e.message}", e)
@@ -519,6 +540,7 @@ class ModelManager(private val context: Context) {
     /**
      * Get file paths for a HF model
      * Returns Pair(languagePath, visionPath)
+     * For unified models, both paths will be the same
      */
     fun getHFModelPaths(modelId: String): Pair<String, String>? {
         val metadata = metadataManager.getModelById(modelId) ?: return null
@@ -536,8 +558,15 @@ class ModelManager(private val context: Context) {
         // Standard HF model path
         val prefix = metadata.hfRepo.replace("/", "_")
         val languagePath = File(modelsDir, "${prefix}_${metadata.languageFile}").absolutePath
-        val visionPath = File(modelsDir, "${prefix}_${metadata.visionFile}").absolutePath
+        
+        // For unified models, vision path is the same as language path
+        val visionPath = if (metadata.isUnified) {
+            languagePath
+        } else {
+            File(modelsDir, "${prefix}_${metadata.visionFile}").absolutePath
+        }
 
+        Log.d(TAG, "Model paths for $modelId: language=$languagePath, vision=$visionPath, unified=${metadata.isUnified}")
         return Pair(languagePath, visionPath)
     }
 

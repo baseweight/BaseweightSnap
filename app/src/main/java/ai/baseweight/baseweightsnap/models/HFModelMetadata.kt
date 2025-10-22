@@ -20,16 +20,17 @@ data class HFModelMetadata(
     val name: String,
     val hfRepo: String,              // "orgName/repository"
     val languageFile: String,        // Filename of main GGUF
-    val visionFile: String,          // Filename of mmproj GGUF
+    val visionFile: String,          // Filename of mmproj GGUF (may be same as languageFile for unified models)
     val configFile: String? = null, // config.json not needed for GGUF models
     val downloadDate: Long = System.currentTimeMillis(),
     val isDefault: Boolean = false,
     val languageSize: Long,
     val visionSize: Long,
     val downloadState: DownloadState? = DownloadState.COMPLETED,  // Nullable for backwards compatibility
-    val downloadProgress: Int = 100  // 0-100
+    val downloadProgress: Int = 100,  // 0-100
+    val isUnified: Boolean = false    // NEW: true if languageFile == visionFile (unified GGUF like Gemma 3)
 ) {
-    val totalSize: Long get() = languageSize + visionSize
+    val totalSize: Long get() = if (isUnified) languageSize else languageSize + visionSize
 
     fun formatSize(): String {
         val totalMB = totalSize / (1024 * 1024)
@@ -77,14 +78,27 @@ data class HFFile(
 }
 
 /**
+ * HuggingFace Manifest response (from v2 API with llama-cpp User-Agent)
+ * Used to detect unified GGUF files
+ */
+data class HFManifest(
+    val ggufFile: String,
+    val mmprojFile: String?
+) {
+    fun isUnified(): Boolean = ggufFile == mmprojFile && !mmprojFile.isNullOrEmpty()
+    fun hasVision(): Boolean = !mmprojFile.isNullOrEmpty()
+}
+
+/**
  * Required files for a VLM model
  */
 data class HFModelFiles(
     val configFile: HFFile?, // config.json not needed for GGUF models
     val languageFile: HFFile,
-    val visionFile: HFFile
+    val visionFile: HFFile?,  // Nullable for text-only models or will point to same file for unified
+    val isUnified: Boolean = false  // True if languageFile == visionFile (unified GGUF like Gemma 3)
 ) {
-    val totalSize: Long get() = (configFile?.size ?: 0) + languageFile.size + visionFile.size
+    val totalSize: Long get() = (configFile?.size ?: 0) + languageFile.size + (if (isUnified) 0 else (visionFile?.size ?: 0))
 }
 
 /**
