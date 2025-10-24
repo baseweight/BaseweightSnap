@@ -64,9 +64,10 @@ class ModelManagerActivity : AppCompatActivity() {
             val repo = intent.getStringExtra("repo") ?: return
             val progress = intent.getIntExtra("progress", 0)
             val status = intent.getStringExtra("status") ?: return
+            val errorMessage = intent.getStringExtra("error")
 
-            android.util.Log.d("ModelManagerActivity", "Received broadcast: repo=$repo, progress=$progress, status=$status")
-            updateDownloadProgress(repo, progress, status)
+            android.util.Log.d("ModelManagerActivity", "Received broadcast: repo=$repo, progress=$progress, status=$status, error=$errorMessage")
+            updateDownloadProgress(repo, progress, status, errorMessage)
         }
     }
 
@@ -182,7 +183,7 @@ class ModelManagerActivity : AppCompatActivity() {
         }
     }
 
-    private fun updateDownloadProgress(repo: String, progress: Int, status: String) {
+    private fun updateDownloadProgress(repo: String, progress: Int, status: String, errorMessage: String? = null) {
         val pending = pendingDownloads[repo]
         if (pending != null) {
             val updated = when (status) {
@@ -203,15 +204,26 @@ class ModelManagerActivity : AppCompatActivity() {
                     loadModels()
                     return
                 }
-                "ERROR" -> pending.copy(
-                    downloadState = DownloadState.ERROR,
-                    downloadProgress = 0
-                )
+                "ERROR" -> {
+                    // Remove from pending and show error dialog
+                    pendingDownloads.remove(repo)
+                    loadModels()
+                    showDownloadErrorDialog(repo, errorMessage ?: "Unknown error occurred")
+                    return
+                }
                 else -> pending
             }
             pendingDownloads[repo] = updated
             loadModels()
         }
+    }
+
+    private fun showDownloadErrorDialog(repo: String, errorMessage: String) {
+        MaterialAlertDialogBuilder(this)
+            .setTitle("Download Failed")
+            .setMessage("Failed to download model from $repo:\n\n$errorMessage\n\nPlease ensure the repository contains a valid GGUF vision-language model.")
+            .setPositiveButton("OK", null)
+            .show()
     }
 
     private fun cancelDownload(model: HFModelMetadata) {

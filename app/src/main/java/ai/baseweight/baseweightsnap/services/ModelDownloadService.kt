@@ -181,7 +181,7 @@ class ModelDownloadService : Service() {
                                 onDownloadComplete(repo)
                             }
                             DownloadStatus.ERROR -> {
-                                sendProgressBroadcast(repo, 0, "ERROR")
+                                sendProgressBroadcast(repo, 0, "ERROR", progress.message)
                                 onDownloadError(progress.message)
                             }
                         }
@@ -287,14 +287,15 @@ class ModelDownloadService : Service() {
         }, 500)
     }
 
-    private fun sendProgressBroadcast(repo: String, progress: Int, status: String) {
+    private fun sendProgressBroadcast(repo: String, progress: Int, status: String, errorMessage: String? = null) {
         val intent = Intent("ai.baseweight.baseweightsnap.DOWNLOAD_PROGRESS").apply {
             setPackage(packageName)  // Make broadcast explicit for Android 8.0+
             putExtra("repo", repo)
             putExtra("progress", progress)
             putExtra("status", status)
+            errorMessage?.let { putExtra("error", it) }
         }
-        Log.d(TAG, "Sending broadcast: repo=$repo, progress=$progress, status=$status")
+        Log.d(TAG, "Sending broadcast: repo=$repo, progress=$progress, status=$status, error=$errorMessage")
         sendBroadcast(intent)
     }
 
