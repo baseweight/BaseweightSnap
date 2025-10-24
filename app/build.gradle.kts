@@ -1,6 +1,15 @@
+import java.util.Properties
+
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
+}
+
+// Load local.properties for signing configuration
+val localProperties = Properties()
+val localPropertiesFile = rootProject.file("local.properties")
+if (localPropertiesFile.exists()) {
+    localPropertiesFile.inputStream().use { localProperties.load(it) }
 }
 
 android {
@@ -35,9 +44,9 @@ android {
     signingConfigs {
         create("release") {
             storeFile = file("/home/bowserj/baseweight_secrets/baseweight_snap_upload.jks")
-            storePassword = System.getenv("BASEWEIGHT_KEYSTORE_PASSWORD") ?: ""
+            storePassword = localProperties.getProperty("BASEWEIGHT_KEYSTORE_PASSWORD") ?: ""
             keyAlias = "upload"
-            keyPassword = System.getenv("BASEWEIGHT_KEY_PASSWORD") ?: ""
+            keyPassword = localProperties.getProperty("BASEWEIGHT_KEY_PASSWORD") ?: ""
         }
     }
 
