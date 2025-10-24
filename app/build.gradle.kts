@@ -11,8 +11,8 @@ android {
         applicationId = "ai.baseweight.baseweightsnap"
         minSdk = 28
         targetSdk = 35
-        versionCode = 7
-        versionName = "1.4.0"
+        versionCode = 8
+        versionName = "1.4.1"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
@@ -32,6 +32,15 @@ android {
 
     }
 
+    signingConfigs {
+        create("release") {
+            storeFile = file("/home/bowserj/baseweight_secrets/baseweight_snap_upload.jks")
+            storePassword = System.getenv("BASEWEIGHT_KEYSTORE_PASSWORD") ?: ""
+            keyAlias = "upload"
+            keyPassword = System.getenv("BASEWEIGHT_KEY_PASSWORD") ?: ""
+        }
+    }
+
     buildTypes {
         release {
             isMinifyEnabled = false
@@ -39,6 +48,7 @@ android {
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
+            signingConfig = signingConfigs.getByName("release")
         }
     }
     compileOptions {
