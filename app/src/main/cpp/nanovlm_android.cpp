@@ -16,11 +16,13 @@
 #include <cstring>
 #include <algorithm>
 #include <cmath>
+#include <thread>
 
 #include <executorch/extension/module/module.h>
 #include <executorch/extension/tensor/tensor.h>
+#include <executorch/extension/threadpool/threadpool.h>
 
-#include "nanovlm_preprocessor.h"  // Rust tokenizer FFI
+#include "nanovlm_preprocessor.h"  // Rust tokenizer FFI - temporarily disabled
 #include "image_preprocessor.h"     // C++ image preprocessing
 #include "config_loader.h"          // Config loading
 
@@ -34,6 +36,7 @@ using executorch::extension::from_blob;
 using executorch::extension::TensorPtr;
 using executorch::extension::clone_tensor_ptr;
 using executorch::runtime::EValue;
+using executorch::runtime::Error;
 
 // Global instance of the inference engine
 class NanoVLMAndroidInference {
@@ -66,13 +69,27 @@ public:
         try {
             LOGi("Loading nanoVLM models from %s", model_dir.c_str());
 
+            // Configure XNNPack threadpool for multi-core performance
+            unsigned int num_cores = std::thread::hardware_concurrency();
+            // Use all available cores for maximum performance
+            // On mobile devices, this typically gives 4-8 cores
+            unsigned int num_threads = num_cores > 0 ? num_cores : 4;
+            LOGi("Configuring XNNPack threadpool with %u threads (%u cores detected)",
+                 num_threads, num_cores);
+            ::executorch::extension::threadpool::get_threadpool()->_unsafe_reset_threadpool(num_threads);
+
             // Load config
             config_ = load_config(model_dir + "/config.json");
             LOGi("Config loaded successfully");
 
             // Load ExecuTorch modules
             LOGi("Loading vision encoder from: %s", (model_dir + "/vision_encoder.pte").c_str());
-            vision_encoder_ = std::make_unique<Module>(model_dir + "/vision_encoder.pte");
+            vision_encoder_ = std::make_unique<Module>(model_dir + "/vision_encoder.pte", Module::LoadMode::Mmap);
+            auto load_err = vision_encoder_->load();
+            if (load_err != Error::Ok) {
+                LOGe("Failed to load vision encoder: error %d", (int)load_err);
+                return false;
+            }
             LOGi("Vision encoder loaded successfully");
 
             // Check if module loaded correctly
@@ -87,19 +104,44 @@ public:
             }
 
             LOGi("Loading modality projector from: %s", (model_dir + "/modality_projector.pte").c_str());
-            modality_projector_ = std::make_unique<Module>(model_dir + "/modality_projector.pte");
+            modality_projector_ = std::make_unique<Module>(model_dir + "/modality_projector.pte", Module::LoadMode::Mmap);
+            load_err = modality_projector_->load();
+            if (load_err != Error::Ok) {
+                LOGe("Failed to load modality projector: error %d", (int)load_err);
+                return false;
+            }
             LOGi("Modality projector loaded successfully");
 
-            prefill_decoder_ = std::make_unique<Module>(model_dir + "/language_decoder_prefill.pte");
+            prefill_decoder_ = std::make_unique<Module>(model_dir + "/language_decoder_prefill.pte", Module::LoadMode::Mmap);
+            load_err = prefill_decoder_->load();
+            if (load_err != Error::Ok) {
+                LOGe("Failed to load prefill decoder: error %d", (int)load_err);
+                return false;
+            }
             LOGi("Prefill decoder loaded");
 
-            decode_decoder_ = std::make_unique<Module>(model_dir + "/language_decoder_decode.pte");
+            decode_decoder_ = std::make_unique<Module>(model_dir + "/language_decoder_decode.pte", Module::LoadMode::Mmap);
+            load_err = decode_decoder_->load();
+            if (load_err != Error::Ok) {
+                LOGe("Failed to load decode decoder: error %d", (int)load_err);
+                return false;
+            }
             LOGi("Decode decoder loaded");
 
-            token_embedding_ = std::make_unique<Module>(model_dir + "/token_embedding.pte");
+            token_embedding_ = std::make_unique<Module>(model_dir + "/token_embedding.pte", Module::LoadMode::Mmap);
+            load_err = token_embedding_->load();
+            if (load_err != Error::Ok) {
+                LOGe("Failed to load token embedding: error %d", (int)load_err);
+                return false;
+            }
             LOGi("Token embedding loaded");
 
-            lm_head_ = std::make_unique<Module>(model_dir + "/lm_head.pte");
+            lm_head_ = std::make_unique<Module>(model_dir + "/lm_head.pte", Module::LoadMode::Mmap);
+            load_err = lm_head_->load();
+            if (load_err != Error::Ok) {
+                LOGe("Failed to load lm head: error %d", (int)load_err);
+                return false;
+            }
             LOGi("LM head loaded");
 
             // Load tokenizer
@@ -149,12 +191,15 @@ public:
                                                     (int32_t)img.height, (int32_t)img.width};
 
                 // Sanity check: verify data is in reasonable range [0, 1]
+                /*
                 float min_val = *std::min_element(img.data.begin(), img.data.end());
                 float max_val = *std::max_element(img.data.begin(), img.data.end());
 
                 LOGi("Running vision encoder on image %zu: shape [%d, %d, %d, %d], data range [%.3f, %.3f]",
                      img_idx, image_shape[0], image_shape[1], image_shape[2], image_shape[3], min_val, max_val);
-
+                */
+                LOGi("Running vision encoder on image %zu: shape [%d, %d, %d, %d]", img_idx,
+                     image_shape[0], image_shape[1], image_shape[2], image_shape[3]);
                 auto image_tensor = from_blob(img.data.data(), image_shape, ScalarType::Float);
 
                 // Run vision encoder

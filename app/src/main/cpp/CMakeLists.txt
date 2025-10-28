@@ -20,8 +20,8 @@ if(${CMAKE_ANDROID_ARCH_ABI} STREQUAL "arm64-v8a")
 endif()
 
 # ExecuTorch configuration
-set(EXECUTORCH_ROOT "/home/bowserj/executorch" CACHE PATH "Path to ExecuTorch root directory")
-set(EXECUTORCH_BUILD_DIR "/home/bowserj/executorch/cmake-out-android-arm64" CACHE PATH "Path to ExecuTorch Android build")
+set(EXECUTORCH_ROOT "/Users/bowserj/executorch_repos/executorch" CACHE PATH "Path to ExecuTorch root directory")
+set(EXECUTORCH_BUILD_DIR "/Users/bowserj/executorch_repos/executorch/cmake-out-android-arm64-v8a" CACHE PATH "Path to ExecuTorch Android build")
 
 message(STATUS "ExecuTorch root: ${EXECUTORCH_ROOT}")
 message(STATUS "ExecuTorch build: ${EXECUTORCH_BUILD_DIR}")
@@ -38,7 +38,9 @@ include_directories(
     ${EXECUTORCH_ROOT}/runtime/core/portable_type/c10/c10/macros
     ${EXECUTORCH_ROOT}/extension/module
     ${EXECUTORCH_ROOT}/extension/tensor
+    ${EXECUTORCH_ROOT}/extension/threadpool
     ${EXECUTORCH_BUILD_DIR}
+    ${EXECUTORCH_ROOT}/backends/xnnpack/third-party/pthreadpool/include
 )
 
 # Rust tokenizer include (relative to cpp directory)

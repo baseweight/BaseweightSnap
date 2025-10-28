@@ -8,14 +8,12 @@ name = "nanovlm_preprocessor"
 crate-type = ["cdylib", "staticlib"]
 
 [dependencies]
-tokenizers = { version = "0.21", default-features = false, features = ["onig"] }
-image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
+tokenizers = { version = "0.21", default-features = false, features = ["fancy-regex"] }
 serde_json = "1.0"
-fast_image_resize = "5.1.4"
 
-[dev-dependencies]
-ndarray = "0.16"
-ndarray-npy = "0.9"
+# [dev-dependencies]
+# ndarray = "0.16"
+# ndarray-npy = "0.9"
 
 [profile.release]
 opt-level = 3

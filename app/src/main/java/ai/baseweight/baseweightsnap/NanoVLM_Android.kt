@@ -76,26 +76,28 @@ class NanoVLM_Android {
      * @param bitmap Input image
      * @return true if image processed successfully
      */
-    fun processImage(bitmap: Bitmap): Boolean {
-        // Ensure bitmap is in ARGB_8888 format
-        val config = if (bitmap.config == Bitmap.Config.ARGB_8888) {
-            bitmap
-        } else {
-            bitmap.copy(Bitmap.Config.ARGB_8888, false)
-        }
+    suspend fun processImage(bitmap: Bitmap): Boolean {
+        return withContext(runLoop) {
+            // Ensure bitmap is in ARGB_8888 format
+            val config = if (bitmap.config == Bitmap.Config.ARGB_8888) {
+                bitmap
+            } else {
+                bitmap.copy(Bitmap.Config.ARGB_8888, false)
+            }
 
-        val byteBuffer = ByteBuffer.allocateDirect(config.byteCount)
-        config.copyPixelsToBuffer(byteBuffer)
-        byteBuffer.rewind()
+            val byteBuffer = ByteBuffer.allocateDirect(config.byteCount)
+            config.copyPixelsToBuffer(byteBuffer)
+            byteBuffer.rewind()
 
-        Log.d(tag, "Processing image: ${config.width}x${config.height}")
-        val success = nativeProcessImageFromBuffer(byteBuffer, config.width, config.height)
-        if (success) {
-            Log.d(tag, "Image processed successfully")
-        } else {
-            Log.e(tag, "Failed to process image")
+            Log.d(tag, "Processing image: ${config.width}x${config.height}")
+            val success = nativeProcessImageFromBuffer(byteBuffer, config.width, config.height)
+            if (success) {
+                Log.d(tag, "Image processed successfully")
+            } else {
+                Log.e(tag, "Failed to process image")
+            }
+            success
         }
-        return success
     }
 
     /**
