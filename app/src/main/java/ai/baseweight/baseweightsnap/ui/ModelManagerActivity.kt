@@ -6,17 +6,21 @@ import ai.baseweight.baseweightsnap.models.DownloadState
 import ai.baseweight.baseweightsnap.models.HFModelMetadata
 import ai.baseweight.baseweightsnap.models.ValidationResult
 import ai.baseweight.baseweightsnap.services.ModelDownloadService
+import android.Manifest
 import android.app.AlertDialog
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
 import android.view.LayoutInflater
 import android.view.View
 import android.widget.Toast
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.content.ContextCompat
 import androidx.lifecycle.lifecycleScope
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
@@ -36,15 +40,34 @@ class ModelManagerActivity : AppCompatActivity() {
     // Track pending downloads
     private val pendingDownloads = mutableMapOf<String, HFModelMetadata>()
 
+    // Track repo waiting for notification permission
+    private var pendingDownloadRepo: String? = null
+
+    // Notification permission launcher
+    private val requestNotificationPermission =
+        registerForActivityResult(ActivityResultContracts.RequestPermission()) { isGranted ->
+            val repo = pendingDownloadRepo ?: return@registerForActivityResult
+            pendingDownloadRepo = null
+
+            if (!isGranted) {
+                // Show warning but proceed with download
+                showNotificationPermissionDeniedDialog(repo)
+            } else {
+                // Permission granted, proceed with download
+                proceedWithDownload(repo)
+            }
+        }
+
     // Broadcast receiver for download progress
     private val downloadProgressReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context, intent: Intent) {
             val repo = intent.getStringExtra("repo") ?: return
             val progress = intent.getIntExtra("progress", 0)
             val status = intent.getStringExtra("status") ?: return
+            val errorMessage = intent.getStringExtra("error")
 
-            android.util.Log.d("ModelManagerActivity", "Received broadcast: repo=$repo, progress=$progress, status=$status")
-            updateDownloadProgress(repo, progress, status)
+            android.util.Log.d("ModelManagerActivity", "Received broadcast: repo=$repo, progress=$progress, status=$status, error=$errorMessage")
+            updateDownloadProgress(repo, progress, status, errorMessage)
         }
     }
 
@@ -110,6 +133,10 @@ class ModelManagerActivity : AppCompatActivity() {
         } else {
             registerReceiver(downloadProgressReceiver, filter)
         }
+
+        // Clean up stale pending downloads (in case downloads completed while app was backgrounded)
+        cleanupStalePendingDownloads()
+
         // Refresh list when returning to activity
         loadModels()
     }
@@ -121,6 +148,22 @@ class ModelManagerActivity : AppCompatActivity() {
             unregisterReceiver(downloadProgressReceiver)
         } catch (e: Exception) {
             // Already unregistered
+        }
+    }
+
+    private fun cleanupStalePendingDownloads() {
+        // Get list of downloaded models
+        val downloadedModels = modelManager.listDownloadedModels()
+        val downloadedRepos = downloadedModels.map { it.hfRepo }.toSet()
+
+        // Remove any pending downloads that are now completed
+        val iterator = pendingDownloads.iterator()
+        while (iterator.hasNext()) {
+            val entry = iterator.next()
+            if (downloadedRepos.contains(entry.key)) {
+                android.util.Log.d("ModelManagerActivity", "Removing stale pending download: ${entry.key}")
+                iterator.remove()
+            }
         }
     }
 
@@ -140,7 +183,7 @@ class ModelManagerActivity : AppCompatActivity() {
         }
     }
 
-    private fun updateDownloadProgress(repo: String, progress: Int, status: String) {
+    private fun updateDownloadProgress(repo: String, progress: Int, status: String, errorMessage: String? = null) {
         val pending = pendingDownloads[repo]
         if (pending != null) {
             val updated = when (status) {
@@ -161,15 +204,26 @@ class ModelManagerActivity : AppCompatActivity() {
                     loadModels()
                     return
                 }
-                "ERROR" -> pending.copy(
-                    downloadState = DownloadState.ERROR,
-                    downloadProgress = 0
-                )
+                "ERROR" -> {
+                    // Remove from pending and show error dialog
+                    pendingDownloads.remove(repo)
+                    loadModels()
+                    showDownloadErrorDialog(repo, errorMessage ?: "Unknown error occurred")
+                    return
+                }
                 else -> pending
             }
             pendingDownloads[repo] = updated
             loadModels()
         }
+    }
+
+    private fun showDownloadErrorDialog(repo: String, errorMessage: String) {
+        MaterialAlertDialogBuilder(this)
+            .setTitle("Download Failed")
+            .setMessage("Failed to download model from $repo:\n\n$errorMessage\n\nPlease ensure the repository contains a valid GGUF vision-language model.")
+            .setPositiveButton("OK", null)
+            .show()
     }
 
     private fun cancelDownload(model: HFModelMetadata) {
@@ -224,6 +278,26 @@ class ModelManagerActivity : AppCompatActivity() {
     }
 
     private fun startDownload(repo: String) {
+        // Check notification permission on Android 13+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            val notificationPermission = ContextCompat.checkSelfPermission(
+                this,
+                Manifest.permission.POST_NOTIFICATIONS
+            )
+
+            if (notificationPermission != PackageManager.PERMISSION_GRANTED) {
+                // Store repo and request permission
+                pendingDownloadRepo = repo
+                requestNotificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
+                return
+            }
+        }
+
+        // Permission granted or not needed (older Android), proceed with download
+        proceedWithDownload(repo)
+    }
+
+    private fun proceedWithDownload(repo: String) {
         // Create a pending model entry
         val pendingModel = HFModelMetadata(
             id = "pending_$repo",
@@ -253,6 +327,17 @@ class ModelManagerActivity : AppCompatActivity() {
         // Don't finish() - stay on the Model Manager screen
         // The download happens in background service
         // Progress will be shown in the model list
+    }
+
+    private fun showNotificationPermissionDeniedDialog(repo: String) {
+        AlertDialog.Builder(this)
+            .setTitle("Notification Permission Denied")
+            .setMessage("Without notification permission, you won't be notified of download completion if you put the app in the background.\n\nDo you want to continue downloading?")
+            .setPositiveButton("Continue") { _, _ ->
+                proceedWithDownload(repo)
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
     }
 
     private fun setModelAsDefault(model: HFModelMetadata) {
