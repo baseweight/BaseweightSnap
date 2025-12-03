@@ -36,19 +36,4 @@ object VulkanDetector {
         Log.d(TAG, "Vulkan 1.2+ support: $hasVulkan12")
         return hasVulkan12
     }
-
-    /**
-     * Returns the library name to load based on Vulkan support
-     * @param context Application context
-     * @return "baseweightsnap-vulkan" if Vulkan 1.2+ is supported, "baseweightsnap-cpu" otherwise
-     */
-    fun getLibraryName(context: Context): String {
-        return if (hasVulkan12Support(context)) {
-            Log.i(TAG, "Loading Vulkan-enabled library")
-            "baseweightsnap-vulkan"
-        } else {
-            Log.i(TAG, "Loading CPU-optimized library (NEON/KleidiAI)")
-            "baseweightsnap-cpu"
-        }
-    }
 }

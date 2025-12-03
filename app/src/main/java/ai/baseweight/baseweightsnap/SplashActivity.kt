@@ -47,6 +47,12 @@ class SplashActivity : AppCompatActivity() {
 
     private fun checkAndLoadModels() {
         scope.launch {
+            // Check for Vulkan 1.2 support
+            if (!VulkanDetector.hasVulkan12Support(this@SplashActivity)) {
+                showVulkanWarningDialog()
+                return@launch
+            }
+
             try {
                 // First, check for HF downloaded models
                 val defaultHFModel = modelManager.getDefaultModel()
@@ -140,6 +146,17 @@ class SplashActivity : AppCompatActivity() {
                 .setCancelable(false)
                 .show()
         }
+    }
+
+    private fun showVulkanWarningDialog() {
+        AlertDialog.Builder(this)
+            .setTitle("Device Not Supported")
+            .setMessage("This app requires Vulkan 1.2 or higher, which is not available on your device.\n\nVulkan is a graphics API that enables GPU acceleration for AI models. Unfortunately, your device's hardware does not support the required version.")
+            .setPositiveButton("OK") { _, _ ->
+                finishAffinity() // Close the app
+            }
+            .setCancelable(false)
+            .show()
     }
 
     private fun showWiFiWarningDialog() {

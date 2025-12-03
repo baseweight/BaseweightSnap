@@ -28,8 +28,7 @@ android {
         externalNativeBuild {
             cmake {
                 arguments(
-                    "-DANDROID_STL=c++_shared",
-                    "-DBUILD_VARIANT=${project.findProperty("BUILD_VARIANT") ?: "cpu"}"
+                    "-DANDROID_STL=c++_shared"
                 )
             }
             // Don't build 32 bit libraries in 2025

@@ -98,8 +98,7 @@ bool ModelManager::loadVisionModel(const char* mmproj_path) {
 
     mparams.print_timings = true;
     mparams.n_threads = 1;
-    mparams.verbosity = GGML_LOG_LEVEL_INFO;
-    
+
     ctx_vision.reset(mtmd_init_from_file(mmproj_path, model, mparams));
     if (!ctx_vision.get()) {
         LOGe("Failed to load vision model from %s", mmproj_path);
