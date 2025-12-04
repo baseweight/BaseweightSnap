@@ -21,12 +21,11 @@ class MTMD_Android(private val context: android.content.Context) {
         thread(start = false, name = "Llm-RunLoop") {
             Log.d(tag, "Dedicated thread for native code: ${Thread.currentThread().name}")
 
-            // Dynamically load the appropriate library based on Vulkan support
-            val libraryName = VulkanDetector.getLibraryName(context)
-            Log.i(tag, "Loading native library: $libraryName")
+            // Load Vulkan-enabled library
+            Log.i(tag, "Loading native library: baseweightsnap")
 
             // No-op if called more than once.
-            System.loadLibrary(libraryName)
+            System.loadLibrary("baseweightsnap")
 
             // Set llama log handler to Android
             log_to_android()

@@ -19,80 +19,35 @@ set(LLAMA_BUILD_COMMIT "unknown")
 set(LLAMA_BUILD_COMMON ON)
 set(LLAMA_BUILD_TOOLS ON)
 
-# Allow selection of build variant via BUILD_VARIANT option
-# Default to CPU variant if not specified
-if(NOT DEFINED BUILD_VARIANT)
-    set(BUILD_VARIANT "cpu")
-endif()
+# =============================================================================
+# Vulkan Variant (Simplified - only build option)
+# =============================================================================
 
-message(STATUS "Building variant: ${BUILD_VARIANT}")
+set(GGML_VULKAN ON)
+set(GGML_CPU_KLEIDIAI OFF)
 
-if(BUILD_VARIANT STREQUAL "cpu")
-    # =============================================================================
-    # CPU Variant (NEON/KleidiAI optimized)
-    # =============================================================================
+# Set Vulkan headers path
+set(VULKAN_HEADERS_INSTALL_DIR /home/bowserj/Vulkan-Headers)
+set(Vulkan_INCLUDE_DIR /home/bowserj/Vulkan-Headers/include)
+include_directories(/home/bowserj/Vulkan-Headers/include)
 
-    # Check if the target architecture is arm64-v8a
-    if(${CMAKE_ANDROID_ARCH_ABI} STREQUAL "arm64-v8a")
-        set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -march=armv8.4a+dotprod")
-        set(GGML_CPU_KLEIDIAI ON)
-        set(FETCHCONTENT_SOURCE_DIR_KLEIDIAI_DOWNLOAD /home/bowserj/kleidiai)
-    else()
-        set(GGML_CPU_KLEIDIAI OFF)
-    endif()
+# Load llama.cpp
+add_subdirectory(llama.cpp build-llama)
 
-    set(GGML_VULKAN OFF)
+# Build Vulkan library
+add_library(baseweightsnap SHARED
+        mtmd-android.cpp
+        model_manager.cpp)
 
-    # Load llama.cpp for CPU variant
-    add_subdirectory(llama.cpp build-llama)
+target_include_directories(baseweightsnap PUBLIC
+        ${CMAKE_CURRENT_SOURCE_DIR}/llama.cpp/common
+        ${CMAKE_CURRENT_SOURCE_DIR}/llama.cpp/tools/mtmd
+        ${CMAKE_CURRENT_SOURCE_DIR}/llama.cpp/src
+        ${CMAKE_CURRENT_SOURCE_DIR}/llama.cpp/ggml/src)
 
-    # Build CPU variant library
-    add_library(baseweightsnap-cpu SHARED
-            mtmd-android.cpp
-            model_manager.cpp)
-
-    target_include_directories(baseweightsnap-cpu PUBLIC
-            ${CMAKE_CURRENT_SOURCE_DIR}/llama.cpp/common
-            ${CMAKE_CURRENT_SOURCE_DIR}/llama.cpp/tools/mtmd
-            ${CMAKE_CURRENT_SOURCE_DIR}/llama.cpp/src
-            ${CMAKE_CURRENT_SOURCE_DIR}/llama.cpp/ggml/src)
-
-    target_link_libraries(baseweightsnap-cpu
-            llama
-            common
-            mtmd
-            android
-            log)
-
-elseif(BUILD_VARIANT STREQUAL "vulkan")
-    # =============================================================================
-    # Vulkan Variant
-    # =============================================================================
-
-    set(GGML_VULKAN ON)
-    set(GGML_CPU_KLEIDIAI OFF)
-
-    # Load llama.cpp for Vulkan variant
-    add_subdirectory(llama.cpp build-llama)
-
-    # Build Vulkan variant library
-    add_library(baseweightsnap-vulkan SHARED
-            mtmd-android.cpp
-            model_manager.cpp)
-
-    target_include_directories(baseweightsnap-vulkan PUBLIC
-            ${CMAKE_CURRENT_SOURCE_DIR}/llama.cpp/common
-            ${CMAKE_CURRENT_SOURCE_DIR}/llama.cpp/tools/mtmd
-            ${CMAKE_CURRENT_SOURCE_DIR}/llama.cpp/src
-            ${CMAKE_CURRENT_SOURCE_DIR}/llama.cpp/ggml/src)
-
-    target_link_libraries(baseweightsnap-vulkan
-            llama
-            common
-            mtmd
-            android
-            log)
-
-else()
-    message(FATAL_ERROR "Invalid BUILD_VARIANT: ${BUILD_VARIANT}. Must be 'cpu' or 'vulkan'")
-endif()
+target_link_libraries(baseweightsnap
+        llama
+        common
+        mtmd
+        android
+        log)
