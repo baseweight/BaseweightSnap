@@ -82,7 +82,7 @@ android {
     buildFeatures {
         viewBinding = true
     }
-    ndkVersion = "28.2.13676358"
+    ndkVersion = project.findProperty("android.ndkVersion")?.toString() ?: "27.0.12077973"
     
     packaging {
         jniLibs {

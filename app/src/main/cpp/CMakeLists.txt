@@ -17,7 +17,7 @@ set(BUILD_TARGET "unknown")
 set(LLAMA_BUILD_NUMBER 0)
 set(LLAMA_BUILD_COMMIT "unknown")
 set(LLAMA_BUILD_COMMON ON)
-set(LLAMA_BUILD_TOOLS ON)
+set(LLAMA_BUILD_TOOLS OFF)
 
 # =============================================================================
 # Vulkan Variant (Simplified - only build option)
@@ -26,13 +26,18 @@ set(LLAMA_BUILD_TOOLS ON)
 set(GGML_VULKAN ON)
 set(GGML_CPU_KLEIDIAI OFF)
 
-# Set Vulkan headers path
-set(VULKAN_HEADERS_INSTALL_DIR /home/bowserj/Vulkan-Headers)
-set(Vulkan_INCLUDE_DIR /home/bowserj/Vulkan-Headers/include)
-include_directories(/home/bowserj/Vulkan-Headers/include)
+# Set Vulkan headers path (relative to project root)
+set(VULKAN_HEADERS_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../../../../third_party/Vulkan-Headers)
+set(VULKAN_HEADERS_INSTALL_DIR ${VULKAN_HEADERS_DIR})
+set(Vulkan_INCLUDE_DIR ${VULKAN_HEADERS_DIR}/include)
+include_directories(${VULKAN_HEADERS_DIR}/include)
 
 # Load llama.cpp
 add_subdirectory(llama.cpp build-llama)
+
+# Build mtmd (multimodal) library - not built when LLAMA_BUILD_TOOLS is OFF
+set(LLAMA_INSTALL_VERSION "0.0.0")
+add_subdirectory(llama.cpp/tools/mtmd build-mtmd)
 
 # Build Vulkan library
 add_library(baseweightsnap SHARED

@@ -58,9 +58,11 @@ class HuggingFaceApiClientTest {
         val files = result.getOrNull()!!
 
         // Verify all required files found
-        assertTrue(files.configFile.isConfig)
+        assertNotNull(files.configFile)
+        assertTrue(files.configFile!!.isConfig)
         assertTrue(files.languageFile.isGGUF)
-        assertTrue(files.visionFile.isMMProj)
+        assertNotNull(files.visionFile)
+        assertTrue(files.visionFile!!.isMMProj)
         assertFalse(files.languageFile.isMMProj)
     }
 
