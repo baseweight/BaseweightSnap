@@ -111,12 +111,31 @@ bool ModelManager::initializeContext() {
     llama_context_params ctx_params = llama_context_default_params();
     ctx_params.n_ctx = 4096;  // Adjust based on your needs
     ctx_params.n_batch = n_batch;
-    
+    ctx_params.swa_full = false;  // Match CLI behavior
+
     lctx = llama_init_from_model(model, ctx_params);
     if (!lctx) {
         LOGe("Failed to create language context");
         return false;
     }
+
+    // Warmup: let backends compile and validate compute graphs before real data.
+    // Without this, the Hexagon backend can crash on the first real decode.
+    llama_set_warmup(lctx, true);
+    {
+        llama_token bos = llama_vocab_bos(vocab);
+        llama_token eos = llama_vocab_eos(vocab);
+        std::vector<llama_token> tmp;
+        if (bos != LLAMA_TOKEN_NULL) tmp.push_back(bos);
+        if (eos != LLAMA_TOKEN_NULL) tmp.push_back(eos);
+        if (tmp.empty()) tmp.push_back(0);
+        if (llama_decode(lctx, llama_batch_get_one(tmp.data(), tmp.size()))) {
+            LOGe("Warmup decode failed");
+        }
+    }
+    llama_set_warmup(lctx, false);
+    llama_memory_clear(llama_get_memory(lctx), true);
+
     return true;
 }
 
