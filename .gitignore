@@ -27,3 +27,7 @@ app/release/
 # Temporary files
 *.tmp
 *.swp
+
+# Hexagon build artifacts
+hexagon-libs/
+app/src/main/cpp/llama.cpp/build-hexagon/

@@ -12,6 +12,7 @@
 #include <math.h>
 #include <string>
 #include <unistd.h>
+#include <cstdlib>
 #include "llama.h"
 #include "common.h"
 #include "mtmd.h"
@@ -178,7 +179,13 @@ Java_ai_baseweight_baseweightsnap_MTMD_1Android_process_1image(
 
 extern "C"
 JNIEXPORT void JNICALL
-Java_ai_baseweight_baseweightsnap_MTMD_1Android_backend_1init(JNIEnv *, jobject) {
+Java_ai_baseweight_baseweightsnap_MTMD_1Android_backend_1init(JNIEnv *env, jobject, jstring native_lib_dir) {
+    if (native_lib_dir) {
+        const char *path = env->GetStringUTFChars(native_lib_dir, nullptr);
+        LOGi("Setting ADSP_LIBRARY_PATH=%s", path);
+        setenv("ADSP_LIBRARY_PATH", path, 1);
+        env->ReleaseStringUTFChars(native_lib_dir, path);
+    }
     llama_backend_init();
 }
 
