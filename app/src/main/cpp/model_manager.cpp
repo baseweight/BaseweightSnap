@@ -216,6 +216,13 @@ void ModelManager::generateResponseAsync(const char* prompt, int max_tokens, JNI
     // Store the callback
     setCurrentCallback(env, callback);
 
+    // Reset context for a fresh generation with the new image.
+    // Without this, the KV cache accumulates tokens from all previous
+    // generations and n_past grows unbounded, causing stale context.
+    n_past = 0;
+    llama_memory_clear(llama_get_memory(lctx), true);
+    common_sampler_reset(sampler);
+
     // This ate up literal days of my life
     std::string str_prompt(prompt);
     if(str_prompt.find("<__image__>") == std::string::npos) {
