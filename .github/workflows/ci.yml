@@ -37,7 +37,7 @@ jobs:
           yes | sdkmanager --install "ndk;${{ env.NDK_VERSION }}" "cmake;3.22.1" || true
 
       - name: Run unit tests
-        run: ./gradlew testDebugUnitTest --no-daemon -Pandroid.ndkVersion=${{ env.NDK_VERSION }}
+        run: ./gradlew testVulkanDebugUnitTest --no-daemon -Pandroid.ndkVersion=${{ env.NDK_VERSION }}
 
       - name: Upload test results
         uses: actions/upload-artifact@v4
