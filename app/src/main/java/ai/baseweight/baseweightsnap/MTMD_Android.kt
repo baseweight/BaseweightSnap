@@ -21,7 +21,20 @@ class MTMD_Android(private val context: android.content.Context) {
         thread(start = false, name = "Llm-RunLoop") {
             Log.d(tag, "Dedicated thread for native code: ${Thread.currentThread().name}")
 
-            // Load Vulkan-enabled library
+            // Pre-load vendor libraries needed by ggml backends.
+            // libOpenCL.so is a vendor library needed by libggml-opencl.so.
+            // Android's linker namespace blocks transitive loading, so we
+            // must load it explicitly first.
+            for (path in listOf("/vendor/lib64/libOpenCL.so", "/system/vendor/lib64/libOpenCL.so", "/system/lib64/libOpenCL.so")) {
+                try {
+                    System.load(path)
+                    Log.i(tag, "Loaded OpenCL from $path")
+                    break
+                } catch (e: UnsatisfiedLinkError) {
+                    Log.d(tag, "OpenCL not at $path")
+                }
+            }
+
             Log.i(tag, "Loading native library: baseweightsnap")
 
             // No-op if called more than once.
@@ -29,7 +42,7 @@ class MTMD_Android(private val context: android.content.Context) {
 
             // Set llama log handler to Android
             log_to_android()
-            backend_init(false)
+            backend_init(context.applicationInfo.nativeLibraryDir)
 
             Log.d(tag, system_info())
 
@@ -44,7 +57,7 @@ class MTMD_Android(private val context: android.content.Context) {
     private val nlen: Int = 128
 
     private external fun log_to_android()
-    private external fun backend_init(numa: Boolean)
+    private external fun backend_init(nativeLibDir: String?)
     private external fun backend_free()
     private external fun system_info(): String
     private external fun load_models(languageModelPath: String, mmprojPath: String): Boolean

@@ -31,11 +31,6 @@ android {
                     "-DANDROID_STL=c++_shared"
                 )
             }
-            // Don't build 32 bit libraries in 2025
-            ndk {
-                abiFilters.add("arm64-v8a")
-                abiFilters.add("x86_64")
-            }
         }
 
     }
@@ -57,6 +52,39 @@ android {
                 "proguard-rules.pro"
             )
             signingConfig = signingConfigs.getByName("release")
+        }
+    }
+
+    // Backend variants: Vulkan (from source) or Hexagon (prebuilt)
+    flavorDimensions += "backend"
+    productFlavors {
+        create("vulkan") {
+            dimension = "backend"
+            ndk {
+                abiFilters.addAll(listOf("arm64-v8a", "x86_64"))
+            }
+            externalNativeBuild {
+                cmake {
+                    arguments("-DBACKEND=vulkan")
+                }
+            }
+        }
+        create("hexagon") {
+            dimension = "backend"
+            externalNativeBuild {
+                cmake {
+                    arguments("-DBACKEND=hexagon")
+                }
+            }
+            // Hexagon is Qualcomm-only, no x86_64
+            ndk {
+                abiFilters.clear()
+                abiFilters.add("arm64-v8a")
+            }
+            // Package prebuilt Hexagon/OpenCL/HTP .so files into APK
+            sourceSets.getByName("hexagon") {
+                jniLibs.srcDirs("hexagon-libs")
+            }
         }
     }
     compileOptions {
@@ -88,6 +116,7 @@ android {
         jniLibs {
             pickFirsts.add("lib/arm64-v8a/libc++_shared.so")
             pickFirsts.add("lib/x86_64/libc++_shared.so")
+            useLegacyPackaging = true
         }
     }
 }
