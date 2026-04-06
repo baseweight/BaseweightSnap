@@ -4,6 +4,7 @@ import ai.baseweight.baseweightsnap.ModelManager
 import ai.baseweight.baseweightsnap.R
 import ai.baseweight.baseweightsnap.models.DownloadState
 import ai.baseweight.baseweightsnap.models.HFModelMetadata
+import ai.baseweight.baseweightsnap.models.SuggestedModel
 import ai.baseweight.baseweightsnap.models.ValidationResult
 import ai.baseweight.baseweightsnap.services.ModelDownloadService
 import android.Manifest
@@ -240,19 +241,48 @@ class ModelManagerActivity : AppCompatActivity() {
     private fun showAddModelDialog() {
         val dialogView = LayoutInflater.from(this).inflate(R.layout.dialog_add_model, null)
         val etRepository = dialogView.findViewById<TextInputEditText>(R.id.etRepository)
+        val suggestedContainer = dialogView.findViewById<android.widget.LinearLayout>(R.id.suggestedModelsContainer)
 
-        // Example click listeners
-        dialogView.findViewById<View>(R.id.tvExample1).setOnClickListener {
-            etRepository.setText("HuggingFaceTB/SmolVLM-Instruct")
-        }
-
-        dialogView.findViewById<View>(R.id.tvExample2).setOnClickListener {
-            etRepository.setText("ggml-org/SmolVLM2-256M-Video-Instruct-GGUF")
-        }
+        // Get already-downloaded repos to mark them
+        val downloadedRepos = modelManager.listDownloadedModels().map { it.hfRepo }.toSet()
+        val pendingRepos = pendingDownloads.keys
 
         val dialog = MaterialAlertDialogBuilder(this)
             .setView(dialogView)
             .create()
+
+        // Populate suggested models
+        for (suggested in SuggestedModel.SUGGESTED_MODELS) {
+            val cardView = LayoutInflater.from(this)
+                .inflate(R.layout.item_suggested_model, suggestedContainer, false)
+
+            cardView.findViewById<android.widget.TextView>(R.id.tvSuggestedName).text = suggested.name
+            cardView.findViewById<android.widget.TextView>(R.id.tvSuggestedDescription).text = suggested.description
+            cardView.findViewById<android.widget.TextView>(R.id.tvSuggestedParams).text = suggested.parameterSize
+            cardView.findViewById<android.widget.TextView>(R.id.tvSuggestedSize).text = suggested.approximateDownloadSize
+
+            val isDownloaded = downloadedRepos.contains(suggested.hfRepo)
+            val isPending = pendingRepos.contains(suggested.hfRepo)
+
+            if (isDownloaded) {
+                cardView.alpha = 0.5f
+                cardView.findViewById<android.widget.TextView>(R.id.tvSuggestedSize).text = "Downloaded"
+            } else if (isPending) {
+                cardView.alpha = 0.5f
+                cardView.findViewById<android.widget.TextView>(R.id.tvSuggestedSize).text = "Downloading..."
+            }
+
+            cardView.setOnClickListener {
+                if (!isDownloaded && !isPending) {
+                    dialog.dismiss()
+                    startDownload(suggested.hfRepo)
+                } else if (isDownloaded) {
+                    Toast.makeText(this, "Model already downloaded", Toast.LENGTH_SHORT).show()
+                }
+            }
+
+            suggestedContainer.addView(cardView)
+        }
 
         dialogView.findViewById<View>(R.id.btnCancel).setOnClickListener {
             dialog.dismiss()

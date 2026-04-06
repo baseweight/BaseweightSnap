@@ -25,10 +25,15 @@ android {
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
+        ndk {
+            abiFilters.addAll(listOf("arm64-v8a", "x86_64"))
+        }
+
         externalNativeBuild {
             cmake {
                 arguments(
-                    "-DANDROID_STL=c++_shared"
+                    "-DANDROID_STL=c++_shared",
+                    "-DCMAKE_BUILD_TYPE=Release"
                 )
             }
         }
@@ -54,39 +59,6 @@ android {
             signingConfig = signingConfigs.getByName("release")
         }
     }
-
-    // Backend variants: Vulkan (from source) or Hexagon (prebuilt)
-    flavorDimensions += "backend"
-    productFlavors {
-        create("vulkan") {
-            dimension = "backend"
-            ndk {
-                abiFilters.addAll(listOf("arm64-v8a", "x86_64"))
-            }
-            externalNativeBuild {
-                cmake {
-                    arguments("-DBACKEND=vulkan")
-                }
-            }
-        }
-        create("hexagon") {
-            dimension = "backend"
-            externalNativeBuild {
-                cmake {
-                    arguments("-DBACKEND=hexagon")
-                }
-            }
-            // Hexagon is Qualcomm-only, no x86_64
-            ndk {
-                abiFilters.clear()
-                abiFilters.add("arm64-v8a")
-            }
-            // Package prebuilt Hexagon/OpenCL/HTP .so files into APK
-            sourceSets.getByName("hexagon") {
-                jniLibs.srcDirs("hexagon-libs")
-            }
-        }
-    }
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_11
         targetCompatibility = JavaVersion.VERSION_11
@@ -101,10 +73,10 @@ android {
         }
     }
 
-    // Configure native builds for multiple library variants
+    // Package prebuilt Hexagon/HTP .so files alongside source-built backends
     sourceSets {
         getByName("main") {
-            jniLibs.srcDirs("src/main/jniLibs")
+            jniLibs.srcDirs("src/main/jniLibs", "hexagon-only-libs")
         }
     }
     buildFeatures {
@@ -116,6 +88,8 @@ android {
         jniLibs {
             pickFirsts.add("lib/arm64-v8a/libc++_shared.so")
             pickFirsts.add("lib/x86_64/libc++_shared.so")
+            // Exclude the link-time OpenCL stub — the real driver lives on the device
+            excludes.add("lib/*/libOpenCL.so")
             useLegacyPackaging = true
         }
     }

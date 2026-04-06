@@ -2,17 +2,19 @@ package ai.baseweight.baseweightsnap
 
 import ai.baseweight.baseweightsnap.models.*
 import android.content.Context
-import android.os.Environment
 import android.util.Log
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.withContext
+import android.os.StatFs
 import java.io.File
 import java.io.FileOutputStream
 import java.net.HttpURLConnection
 import java.net.URL
+import kotlin.coroutines.coroutineContext
+import kotlinx.coroutines.ensureActive
 
 data class Model(
     val id: String,
@@ -340,56 +342,107 @@ class ModelManager(private val context: Context) {
         val isUnified = files.isUnified
 
         Log.d(TAG, "Model is ${if (isUnified) "unified" else "separate"} GGUF")
+
+        // Step 2: Check storage space before downloading
+        val modelsDir = getModelsDirectory()
+        val stat = StatFs(modelsDir.absolutePath)
+        val availableBytes = stat.availableBytes
+        // Need extra headroom (10%) for filesystem overhead
+        val requiredBytes = (totalSize * 1.1).toLong()
+        if (availableBytes < requiredBytes) {
+            val availableMB = availableBytes / (1024 * 1024)
+            val requiredMB = requiredBytes / (1024 * 1024)
+            emit(DownloadProgress(0, 0, totalSize, DownloadStatus.ERROR,
+                "Not enough storage space. Need ${requiredMB}MB, have ${availableMB}MB"))
+            return@flow
+        }
+
         emit(DownloadProgress(1, 0, totalSize, DownloadStatus.PENDING, "Downloading files..."))
 
-        // Step 2: Download language model
+        // Step 3: Download language model (skip if already downloaded with correct size)
         val languageFileName = files.languageFile.path.substringAfterLast("/")
-        val languagePath = "${getModelsDirectory()}/${repo.replace("/", "_")}_$languageFileName"
-        val languageUrl = hfApiClient.getDownloadUrl(repo, files.languageFile.path)
-        var lastLanguageProgress = -1
-        downloadFile(languageUrl, languagePath, files.languageFile.size).collect { progress ->
-            // Skip COMPLETED status from individual file - we'll emit overall COMPLETED at the end
-            if (progress.status == DownloadStatus.COMPLETED) return@collect
+        val languagePath = "${modelsDir}/${repo.replace("/", "_")}_$languageFileName"
+        val languageFile = File(languagePath)
+        val languageAlreadyDownloaded = languageFile.exists() && languageFile.length() == files.languageFile.size
 
-            val adjustedProgress = if (isUnified) {
-                // For unified models, this is 1-100%
-                progress.progress.coerceIn(1, 99)
-            } else {
-                // For separate models, this is 1-50%
-                (progress.progress * 0.5).toInt() + 1
-            }
-            
-            if (adjustedProgress != lastLanguageProgress) {
-                emit(progress.copy(
-                    progress = adjustedProgress,
-                    message = if (isUnified) "Downloading unified model..." else "Downloading language model...",
-                    status = DownloadStatus.DOWNLOADING
-                ))
-                lastLanguageProgress = adjustedProgress
+        if (languageAlreadyDownloaded) {
+            Log.d(TAG, "Language model already downloaded, skipping: $languageFileName")
+            emit(DownloadProgress(
+                progress = if (isUnified) 99 else 50,
+                bytesDownloaded = files.languageFile.size,
+                totalBytes = totalSize,
+                status = DownloadStatus.DOWNLOADING,
+                message = "${languageFileName} (already downloaded)"
+            ))
+        } else {
+            val languageUrl = hfApiClient.getDownloadUrl(repo, files.languageFile.path)
+            var lastLanguageProgress = -1
+            downloadFile(languageUrl, languagePath, files.languageFile.size).collect { progress ->
+                // Skip COMPLETED status from individual file - we'll emit overall COMPLETED at the end
+                if (progress.status == DownloadStatus.COMPLETED) return@collect
+                if (progress.status == DownloadStatus.ERROR) {
+                    emit(progress)
+                    return@collect
+                }
+
+                val adjustedProgress = if (isUnified) {
+                    // For unified models, this is 1-100%
+                    progress.progress.coerceIn(1, 99)
+                } else {
+                    // For separate models, this is 1-50%
+                    (progress.progress * 0.5).toInt() + 1
+                }
+
+                if (adjustedProgress != lastLanguageProgress) {
+                    emit(progress.copy(
+                        progress = adjustedProgress,
+                        message = if (isUnified) "Downloading unified model..." else "Downloading language model...",
+                        status = DownloadStatus.DOWNLOADING
+                    ))
+                    lastLanguageProgress = adjustedProgress
+                }
             }
         }
 
-        // Step 3: Download vision model (only if separate)
+        // Step 4: Download vision model (only if separate)
         val visionFileName: String
         val visionPath: String
-        
+
         if (!isUnified && files.visionFile != null) {
             visionFileName = files.visionFile.path.substringAfterLast("/")
-            visionPath = "${getModelsDirectory()}/${repo.replace("/", "_")}_$visionFileName"
-            val visionUrl = hfApiClient.getDownloadUrl(repo, files.visionFile.path)
-            var lastVisionProgress = -1
-            downloadFile(visionUrl, visionPath, files.visionFile.size).collect { progress ->
-                // Skip COMPLETED status from individual file - we'll emit overall COMPLETED at the end
-                if (progress.status == DownloadStatus.COMPLETED) return@collect
+            visionPath = "${modelsDir}/${repo.replace("/", "_")}_$visionFileName"
+            val visionFile = File(visionPath)
+            val visionAlreadyDownloaded = visionFile.exists() && visionFile.length() == files.visionFile.size
 
-                val adjustedProgress = (progress.progress * 0.5).toInt() + 51 // 51-100%
-                if (adjustedProgress != lastVisionProgress) {
-                    emit(progress.copy(
-                        progress = adjustedProgress,
-                        message = "Downloading vision model...",
-                        status = DownloadStatus.DOWNLOADING
-                    ))
-                    lastVisionProgress = adjustedProgress
+            if (visionAlreadyDownloaded) {
+                Log.d(TAG, "Vision model already downloaded, skipping: $visionFileName")
+                emit(DownloadProgress(
+                    progress = 99,
+                    bytesDownloaded = totalSize,
+                    totalBytes = totalSize,
+                    status = DownloadStatus.DOWNLOADING,
+                    message = "${visionFileName} (already downloaded)"
+                ))
+            } else {
+                val visionUrl = hfApiClient.getDownloadUrl(repo, files.visionFile.path)
+                var lastVisionProgress = -1
+                downloadFile(visionUrl, visionPath, files.visionFile.size).collect { progress ->
+                    // Skip COMPLETED status from individual file - we'll emit overall COMPLETED at the end
+                    if (progress.status == DownloadStatus.COMPLETED) return@collect
+                    if (progress.status == DownloadStatus.ERROR) {
+                        emit(progress)
+                        return@collect
+                    }
+
+                    val adjustedProgress = (progress.progress * 0.5).toInt() + 51 // 51-100%
+                    if (adjustedProgress != lastVisionProgress) {
+                        emit(progress.copy(
+                            progress = adjustedProgress,
+                            message = "Downloading vision model...",
+                            status = DownloadStatus.DOWNLOADING
+                        ))
+                        lastVisionProgress = adjustedProgress
+                    }
                 }
             }
         } else {
@@ -427,31 +480,63 @@ class ModelManager(private val context: Context) {
     }.flowOn(Dispatchers.IO)
 
     /**
-     * Download a single file with progress tracking
+     * Download a single file with progress tracking.
+     * Supports resuming partial downloads via HTTP Range headers.
+     * Validates file size after download and cleans up on cancellation.
      */
     private fun downloadFile(url: String, destPath: String, expectedSize: Long): Flow<DownloadProgress> = flow {
         val file = File(destPath)
+        // Use .part suffix during download, rename on completion
+        val partFile = File("$destPath.part")
         file.parentFile?.mkdirs()
 
         try {
-            val connection = URL(url).openConnection() as HttpURLConnection
-            connection.connect()
-
-            if (connection.responseCode != HttpURLConnection.HTTP_OK) {
-                throw Exception("HTTP ${connection.responseCode}: ${connection.responseMessage}")
+            // Check for existing partial download to resume
+            var existingBytes: Long = 0
+            if (partFile.exists() && partFile.length() > 0) {
+                existingBytes = partFile.length()
+                Log.d(TAG, "Found partial download: ${existingBytes} bytes, resuming")
             }
 
-            val totalSize = connection.contentLength.toLong()
-            val inputStream = connection.inputStream
-            val outputStream = FileOutputStream(file)
-            val buffer = ByteArray(8192)
-            var bytesRead: Int
-            var downloadedSize: Long = 0
-            var lastProgress = 0
+            val connection = URL(url).openConnection() as HttpURLConnection
+            if (existingBytes > 0) {
+                connection.setRequestProperty("Range", "bytes=${existingBytes}-")
+            }
+            connection.connect()
 
-            emit(DownloadProgress(0, 0, totalSize, DownloadStatus.DOWNLOADING))
+            val responseCode = connection.responseCode
+
+            // Handle resume response
+            val isResuming = responseCode == HttpURLConnection.HTTP_PARTIAL && existingBytes > 0
+            if (!isResuming && responseCode != HttpURLConnection.HTTP_OK) {
+                val errorStream = connection.errorStream?.bufferedReader()?.use { it.readText() }
+                throw Exception("HTTP $responseCode: ${connection.responseMessage}${errorStream?.let { "\n$it" } ?: ""}")
+            }
+
+            // If server doesn't support Range, start from scratch
+            if (responseCode == HttpURLConnection.HTTP_OK && existingBytes > 0) {
+                Log.d(TAG, "Server does not support resume, restarting download")
+                existingBytes = 0
+                partFile.delete()
+            }
+
+            val contentLength = connection.contentLength.toLong()
+            val totalSize = if (isResuming) existingBytes + contentLength else contentLength
+
+            val inputStream = connection.inputStream
+            // Append if resuming, overwrite otherwise
+            val outputStream = FileOutputStream(partFile, isResuming)
+            val buffer = ByteArray(65536) // 64KB buffer for better throughput
+            var bytesRead: Int
+            var downloadedSize: Long = existingBytes
+            var lastProgress = if (totalSize > 0) (downloadedSize * 100 / totalSize).toInt() else 0
+
+            emit(DownloadProgress(lastProgress, downloadedSize, totalSize, DownloadStatus.DOWNLOADING))
 
             while (true) {
+                // Check for coroutine cancellation
+                coroutineContext.ensureActive()
+
                 bytesRead = inputStream.read(buffer)
                 if (bytesRead == -1) break
 
@@ -475,11 +560,33 @@ class ModelManager(private val context: Context) {
             outputStream.close()
             inputStream.close()
 
+            // Validate downloaded file size
+            val finalSize = partFile.length()
+            if (totalSize > 0 && finalSize != totalSize) {
+                Log.e(TAG, "File size mismatch: expected $totalSize, got $finalSize")
+                // Don't delete partial file - it can be resumed next time
+                throw Exception("Download incomplete: expected $totalSize bytes, got $finalSize")
+            }
+
+            // Rename .part file to final destination
+            if (file.exists()) file.delete()
+            if (!partFile.renameTo(file)) {
+                throw Exception("Failed to rename downloaded file")
+            }
+
             emit(DownloadProgress(100, totalSize, totalSize, DownloadStatus.COMPLETED))
 
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            // Cancelled by user - keep partial file for resume, but close streams
+            Log.d(TAG, "Download cancelled, keeping partial file for resume: ${partFile.name}")
+            throw e  // Re-throw to propagate cancellation
         } catch (e: Exception) {
             Log.e(TAG, "Error downloading file: ${e.message}", e)
-            if (file.exists()) file.delete()
+            // Keep partial file for resume on retryable errors (network issues)
+            // Delete partial file only for non-retryable errors (HTTP 4xx)
+            if (e.message?.contains("HTTP 4") == true) {
+                partFile.delete()
+            }
             emit(DownloadProgress(0, 0, expectedSize, DownloadStatus.ERROR, e.message ?: "Download failed"))
         }
     }.flowOn(Dispatchers.IO)

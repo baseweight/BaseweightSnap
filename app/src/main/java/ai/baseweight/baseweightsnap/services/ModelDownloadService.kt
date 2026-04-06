@@ -116,10 +116,11 @@ class ModelDownloadService : Service() {
             val channel = NotificationChannel(
                 CHANNEL_ID,
                 CHANNEL_NAME,
-                NotificationManager.IMPORTANCE_DEFAULT
+                NotificationManager.IMPORTANCE_LOW
             ).apply {
                 description = "Shows progress for model downloads"
                 setShowBadge(false)
+                setSound(null, null)
             }
             notificationManager.createNotificationChannel(channel)
         }
@@ -317,7 +318,7 @@ class ModelDownloadService : Service() {
         .setContentTitle("Downloading Model")
         .setContentText(message)
         .setSmallIcon(android.R.drawable.stat_sys_download)
-        .setPriority(NotificationCompat.PRIORITY_DEFAULT)
+        .setPriority(NotificationCompat.PRIORITY_LOW)
         .setOngoing(showCancel)
         .setProgress(100, progress, isIndeterminate)
         .apply {
@@ -356,7 +357,7 @@ class ModelDownloadService : Service() {
             if (isSuccess) android.R.drawable.stat_sys_download_done
             else android.R.drawable.stat_notify_error
         )
-        .setPriority(NotificationCompat.PRIORITY_DEFAULT)
+        .setPriority(NotificationCompat.PRIORITY_LOW)
         .setOngoing(false)  // User can dismiss
         .setAutoCancel(true)  // Dismiss when tapped
         .build()

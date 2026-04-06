@@ -16,11 +16,12 @@
     <string name="model_set_as_default">Model set as default</string>
 
     <!-- Add Model Dialog -->
-    <string name="add_model_from_huggingface">Add Model from HuggingFace</string>
-    <string name="enter_hf_repository">Enter the HuggingFace repository in the format: orgName/repository</string>
+    <string name="add_model_from_huggingface">Add Model</string>
+    <string name="enter_hf_repository">Or enter a HuggingFace repository:</string>
     <string name="repository_format">orgName/repository</string>
-    <string name="example_repo">Example: HuggingFaceTB/SmolVLM-Instruct</string>
-    <string name="examples">Examples:</string>
+    <string name="example_repo">Example: ggml-org/SmolVLM2-2.2B-Instruct-GGUF</string>
+    <string name="recommended_models">Recommended Models</string>
+    <string name="custom_repository">Custom Repository</string>
     <string name="download">Download</string>
     <string name="invalid_repository_format">Invalid repository format. Use: orgName/repository</string>
     <string name="downloading_model">Downloading model…</string>

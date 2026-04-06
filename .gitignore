@@ -30,4 +30,8 @@ app/release/
 
 # Hexagon build artifacts
 hexagon-libs/
+app/hexagon-only-libs/
 app/src/main/cpp/llama.cpp/build-hexagon/
+
+# Prebuilt/stub shared libraries
+third_party/opencl-stub/

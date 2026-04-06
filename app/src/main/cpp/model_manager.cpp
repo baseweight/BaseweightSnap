@@ -78,49 +78,55 @@ void ModelManager::onGenerationError(const std::string& error, JNIEnv* env, jobj
 }
 
 bool ModelManager::loadLanguageModel(const char* model_path) {
+    LOGi("loadLanguageModel: starting, path=%s", model_path);
     cleanup();  // Clean up any existing models first
-    
+
     llama_model_params model_params = llama_model_default_params();
-    // Let's try something here
     model_params.n_gpu_layers = gpu_layers;
+    LOGi("loadLanguageModel: loading model with n_gpu_layers=%d", gpu_layers);
     model = llama_model_load_from_file(model_path, model_params);
     if (!model) {
         LOGe("Failed to load language model from %s", model_path);
         return false;
     }
     vocab = llama_model_get_vocab(model);
+    LOGi("loadLanguageModel: model loaded successfully");
     return true;
 }
 
 bool ModelManager::loadVisionModel(const char* mmproj_path) {
+    LOGi("loadVisionModel: starting, path=%s", mmproj_path);
     mtmd_context_params mparams = mtmd_context_params_default();
-    mparams.use_gpu = true;  // Enable GPU by default
+    mparams.use_gpu = true;  // GPU required for correct CLIP embeddings (CPU produces garbage)
 
     mparams.print_timings = true;
-    mparams.n_threads = 1;
+    mparams.n_threads = 4;
 
     ctx_vision.reset(mtmd_init_from_file(mmproj_path, model, mparams));
     if (!ctx_vision.get()) {
         LOGe("Failed to load vision model from %s", mmproj_path);
         return false;
     }
+    LOGi("loadVisionModel: vision model loaded successfully");
     return true;
 }
 
 bool ModelManager::initializeContext() {
+    LOGi("initializeContext: starting");
     llama_context_params ctx_params = llama_context_default_params();
-    ctx_params.n_ctx = 4096;  // Adjust based on your needs
+    ctx_params.n_ctx = 4096;
     ctx_params.n_batch = n_batch;
-    ctx_params.swa_full = false;  // Match CLI behavior
+    ctx_params.swa_full = false;
+    ctx_params.flash_attn_type = LLAMA_FLASH_ATTN_TYPE_AUTO;
 
+    LOGi("initializeContext: creating context (n_ctx=%d, n_batch=%d, flash_attn=auto)", ctx_params.n_ctx, n_batch);
     lctx = llama_init_from_model(model, ctx_params);
     if (!lctx) {
         LOGe("Failed to create language context");
         return false;
     }
+    LOGi("initializeContext: context created, starting warmup");
 
-    // Warmup: let backends compile and validate compute graphs before real data.
-    // Without this, the Hexagon backend can crash on the first real decode.
     llama_set_warmup(lctx, true);
     {
         llama_token bos = llama_vocab_bos(vocab);
@@ -129,12 +135,14 @@ bool ModelManager::initializeContext() {
         if (bos != LLAMA_TOKEN_NULL) tmp.push_back(bos);
         if (eos != LLAMA_TOKEN_NULL) tmp.push_back(eos);
         if (tmp.empty()) tmp.push_back(0);
+        LOGi("initializeContext: warmup decode with %zu tokens", tmp.size());
         if (llama_decode(lctx, llama_batch_get_one(tmp.data(), tmp.size()))) {
             LOGe("Warmup decode failed");
         }
     }
     llama_set_warmup(lctx, false);
     llama_memory_clear(llama_get_memory(lctx), true);
+    LOGi("initializeContext: warmup complete");
 
     return true;
 }
@@ -158,6 +166,7 @@ bool ModelManager::initializeSampler() {
 }
 
 bool ModelManager::processImage(const char* image_path) {
+    LOGi("processImage: loading image from %s", image_path);
     mtmd::bitmap bmp(mtmd_helper_bitmap_init_from_file(ctx_vision.get(), image_path));
     if (!bmp.ptr) {
         LOGe("Failed to load image from %s", image_path);
@@ -213,28 +222,24 @@ JNIEnv* ModelManager::getJNIEnv() {
 }
 
 void ModelManager::generateResponseAsync(const char* prompt, int max_tokens, JNIEnv* env, jobject callback) {
-    // Store the callback
+    LOGi("generateResponseAsync: starting, max_tokens=%d", max_tokens);
     setCurrentCallback(env, callback);
 
-    // Reset context for a fresh generation with the new image.
-    // Without this, the KV cache accumulates tokens from all previous
-    // generations and n_past grows unbounded, causing stale context.
     n_past = 0;
     llama_memory_clear(llama_get_memory(lctx), true);
     common_sampler_reset(sampler);
 
-    // This ate up literal days of my life
     std::string str_prompt(prompt);
     if(str_prompt.find("<__image__>") == std::string::npos) {
         str_prompt = " <__image__> " + str_prompt;
     }
 
-    // Create chat message
     common_chat_msg msg;
     msg.role = "user";
     msg.content = str_prompt;
 
-    if (!evalMessage(msg, true)) {  // Add BOS token for first message
+    LOGi("generateResponseAsync: calling evalMessage");
+    if (!evalMessage(msg, true)) {
         onGenerationError("Failed to evaluate message", env, callback);
         clearCurrentCallback(env);
         return;
@@ -243,18 +248,23 @@ void ModelManager::generateResponseAsync(const char* prompt, int max_tokens, JNI
     llama_tokens generated_tokens;
     int n_predict = max_tokens;
 
+    LOGi("Starting token generation loop, n_predict=%d, n_past=%d", n_predict, n_past);
     for (int i = 0; i < n_predict; i++) {
         // Check if we should stop
         if (g_should_stop) {
+            LOGi("Generation stopped by user at token %d", i);
             onGenerationComplete(env, callback);
             break;
         }
 
+        LOGi("Sampling token %d...", i);
         llama_token token_id = common_sampler_sample(sampler, lctx, -1);
+        LOGi("Sampled token %d: id=%d", i, token_id);
         generated_tokens.push_back(token_id);
         common_sampler_accept(sampler, token_id, true);
 
         if (llama_vocab_is_eog(vocab, token_id) || checkAntiprompt(generated_tokens)) {
+            LOGi("EOG or antiprompt at token %d", i);
             onGenerationComplete(env, callback);
             break;
         }
@@ -280,8 +290,9 @@ void ModelManager::generateResponseAsync(const char* prompt, int max_tokens, JNI
         // Evaluate the token
         common_batch_clear(batch);
         common_batch_add(batch, token_id, n_past++, {0}, true);
+        LOGi("Decoding token %d...", i);
         if (llama_decode(lctx, batch)) {
-            LOGe("failed to decode token");
+            LOGe("failed to decode token %d", i);
             onGenerationError("Failed to decode token", env, callback);
             break;
         }
@@ -322,6 +333,7 @@ bool ModelManager::evalMessage(common_chat_msg& msg, bool add_bos) {
         onTextGenerated("PROGRESS:Tokenizing input...:10", env, currentCallback);
     }
     
+    LOGi("evalMessage: tokenizing prompt with %zu bitmaps", bitmaps_c_ptr.size());
     int32_t res = mtmd_tokenize(ctx_vision.get(),
                                chunks.ptr.get(),
                                &text,
@@ -332,14 +344,14 @@ bool ModelManager::evalMessage(common_chat_msg& msg, bool add_bos) {
         LOGe("Unable to tokenize prompt, res = %d", res);
         return false;
     }
+    LOGi("evalMessage: tokenization complete");
 
-    // Send progress update for evaluation
     if (env && currentCallback) {
         onTextGenerated("PROGRESS:Evaluating chunks...:30", env, currentCallback);
     }
 
     llama_pos new_n_past;
-    // This is our method, it sends progress updates, which is Android-specific
+    LOGi("evalMessage: starting evalChunksWithProgress");
     if (evalChunksWithProgress(ctx_vision.get(),
                                lctx,
                                chunks.ptr.get(),
@@ -351,15 +363,14 @@ bool ModelManager::evalMessage(common_chat_msg& msg, bool add_bos) {
         LOGe("Unable to eval prompt");
         return false;
     }
+    LOGi("evalMessage: eval complete, n_past %d -> %d", n_past, new_n_past);
 
-    // Send progress update for completion
     if (env && currentCallback) {
         onTextGenerated("PROGRESS:Processing complete:100", env, currentCallback);
     }
 
     n_past = new_n_past;
 
-    // Live dangerously
     bitmaps.entries.clear();
     return true;
 }

@@ -179,13 +179,26 @@ Java_ai_baseweight_baseweightsnap_MTMD_1Android_process_1image(
 
 extern "C"
 JNIEXPORT void JNICALL
-Java_ai_baseweight_baseweightsnap_MTMD_1Android_backend_1init(JNIEnv *env, jobject, jstring native_lib_dir) {
+Java_ai_baseweight_baseweightsnap_MTMD_1Android_backend_1init(JNIEnv *env, jobject, jstring native_lib_dir, jstring backend_hint) {
     if (native_lib_dir) {
         const char *path = env->GetStringUTFChars(native_lib_dir, nullptr);
         LOGi("Setting ADSP_LIBRARY_PATH=%s", path);
         setenv("ADSP_LIBRARY_PATH", path, 1);
         env->ReleaseStringUTFChars(native_lib_dir, path);
     }
+
+    // Disable Vulkan on devices where it crashes (e.g. Adreno GPUs).
+    // The ggml backend registry checks GGML_DISABLE_VULKAN at startup.
+    if (backend_hint) {
+        const char *hint = env->GetStringUTFChars(backend_hint, nullptr);
+        LOGi("Backend hint: %s", hint);
+        if (strcmp(hint, "opencl") == 0) {
+            LOGi("Disabling Vulkan backend (using OpenCL instead)");
+            setenv("GGML_DISABLE_VULKAN", "1", 1);
+        }
+        env->ReleaseStringUTFChars(backend_hint, hint);
+    }
+
     llama_backend_init();
 }
 
@@ -302,7 +315,6 @@ Java_ai_baseweight_baseweightsnap_MTMD_1Android_process_1image_1from_1byteBuff(J
                                                                                jobject arr,
                                                                                jint width,
                                                                                jint height) {
-    // TODO: implement process_image_from_byteBuff()
     jbyte* buff = (jbyte*)env->GetDirectBufferAddress(arr);
     jlong buff_len = env->GetDirectBufferCapacity(arr);
     if (buff_len != (jlong)(width * height * 4)) {
@@ -331,7 +343,7 @@ Java_ai_baseweight_baseweightsnap_MTMD_1Android_process_1image_1from_1byteBuff(J
 
     // Store the bitmap in the manager
     ModelManager::getInstance().addBitmap(std::move(bmp));
-    LOGi("Successfully processed image");
+    LOGi("Successfully processed image from buffer: %dx%d", width, height);
 
     return JNI_TRUE;
 }

@@ -329,11 +329,24 @@ class MainActivity : AppCompatActivity() {
             return
         }
 
-        // Get the image from the preview
-        val bitmap = binding.imagePreview.drawable?.toBitmap()
-        if (bitmap == null) {
+        val rawBitmap = binding.imagePreview.drawable?.toBitmap()
+        if (rawBitmap == null) {
             showResponseText("Failed to get image data")
             return
+        }
+        // Only downscale camera captures — gallery images are already reasonably sized
+        val bitmap = if (latestImageUri?.scheme == "content" &&
+            latestImageUri?.authority == "media" &&
+            (rawBitmap.width > 1024 || rawBitmap.height > 1024)) {
+            val scale = 1024f / maxOf(rawBitmap.width, rawBitmap.height)
+            Bitmap.createScaledBitmap(
+                rawBitmap,
+                (rawBitmap.width * scale).toInt(),
+                (rawBitmap.height * scale).toInt(),
+                true
+            )
+        } else {
+            rawBitmap
         }
 
         // Create progress dialog

@@ -37,7 +37,7 @@ jobs:
           yes | sdkmanager --install "ndk;${{ env.NDK_VERSION }}" "cmake;3.22.1" || true
 
       - name: Run unit tests
-        run: ./gradlew testVulkanDebugUnitTest --no-daemon -Pandroid.ndkVersion=${{ env.NDK_VERSION }}
+        run: ./gradlew testDebugUnitTest --no-daemon -Pandroid.ndkVersion=${{ env.NDK_VERSION }}
 
       - name: Upload test results
         uses: actions/upload-artifact@v4
@@ -46,6 +46,6 @@ jobs:
           name: unit-test-results
           path: app/build/reports/tests/
 
-  # Instrumented tests are disabled for now due to Vulkan shader compilation
-  # issues in CI. The tests also make real API calls to HuggingFace which
-  # makes them inherently flaky. Run locally with: ./gradlew connectedDebugAndroidTest
+  # Instrumented tests are disabled for now. The tests make real API calls
+  # to HuggingFace which makes them inherently flaky.
+  # Run locally with: ./gradlew connectedDebugAndroidTest
