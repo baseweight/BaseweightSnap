@@ -329,25 +329,14 @@ class MainActivity : AppCompatActivity() {
             return
         }
 
-        val rawBitmap = binding.imagePreview.drawable?.toBitmap()
-        if (rawBitmap == null) {
-            showResponseText("Failed to get image data")
+        // Load bitmap directly from URI at a reasonable resolution.
+        // Avoids pulling a full-sensor-res bitmap from the ImageView drawable.
+        val bitmap = loadBitmapFromUri(latestImageUri!!, 1024)
+        if (bitmap == null) {
+            showResponseText("Failed to load image")
             return
         }
-        // Only downscale camera captures — gallery images are already reasonably sized
-        val bitmap = if (latestImageUri?.scheme == "content" &&
-            latestImageUri?.authority == "media" &&
-            (rawBitmap.width > 1024 || rawBitmap.height > 1024)) {
-            val scale = 1024f / maxOf(rawBitmap.width, rawBitmap.height)
-            Bitmap.createScaledBitmap(
-                rawBitmap,
-                (rawBitmap.width * scale).toInt(),
-                (rawBitmap.height * scale).toInt(),
-                true
-            )
-        } else {
-            rawBitmap
-        }
+        Log.d("MainActivity", "Loaded bitmap: ${bitmap.width}x${bitmap.height}")
 
         // Create progress dialog
         val progressDialog = AlertDialog.Builder(this).apply {
@@ -484,6 +473,32 @@ class MainActivity : AppCompatActivity() {
             spannableString.setSpan(clickableSpan, spannableString.length - 13, spannableString.length, Spannable.SPAN_EXCLUSIVE_EXCLUSIVE)
             textView.text = spannableString
             textView.movementMethod = LinkMovementMethod.getInstance()
+        }
+    }
+
+    private fun loadBitmapFromUri(uri: Uri, maxDim: Int): Bitmap? {
+        // First pass: get dimensions without decoding pixels
+        val options = android.graphics.BitmapFactory.Options().apply {
+            inJustDecodeBounds = true
+        }
+        contentResolver.openInputStream(uri)?.use {
+            android.graphics.BitmapFactory.decodeStream(it, null, options)
+        }
+        if (options.outWidth <= 0 || options.outHeight <= 0) return null
+
+        // Calculate power-of-2 sample size for efficient downscaling
+        var sampleSize = 1
+        while (options.outWidth / sampleSize > maxDim || options.outHeight / sampleSize > maxDim) {
+            sampleSize *= 2
+        }
+
+        // Second pass: decode at reduced resolution
+        val decodeOptions = android.graphics.BitmapFactory.Options().apply {
+            inSampleSize = sampleSize
+            inPreferredConfig = Bitmap.Config.ARGB_8888
+        }
+        return contentResolver.openInputStream(uri)?.use {
+            android.graphics.BitmapFactory.decodeStream(it, null, decodeOptions)
         }
     }
 

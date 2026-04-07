@@ -337,9 +337,9 @@ Java_ai_baseweight_baseweightsnap_MTMD_1Android_process_1image_1from_1byteBuff(J
         rgb_buffer[dst_idx + 2] = buff[src_idx + 2]; // B;
     }
 
-    // We load directly from the buffer since mtmd takes ownership
-    // this is better than copying to file or messing around with PNG decoding
+    // mtmd_bitmap_init copies the data, so we own rgb_buffer
     mtmd::bitmap bmp(width, height, rgb_buffer);
+    delete[] rgb_buffer;
 
     // Store the bitmap in the manager
     ModelManager::getInstance().addBitmap(std::move(bmp));
