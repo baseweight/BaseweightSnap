@@ -42,7 +42,7 @@ class MTMD_Android(private val context: android.content.Context) {
 
             // Set llama log handler to Android
             log_to_android()
-            val backendHint = BackendDetector.getPreferredGpuBackend()
+            val backendHint = BackendDetector.getPreferredGpuBackend(context)
             Log.i(tag, "Selected GPU backend: $backendHint")
             backend_init(context.applicationInfo.nativeLibraryDir, backendHint)
 

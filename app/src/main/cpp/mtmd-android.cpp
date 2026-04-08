@@ -195,6 +195,10 @@ Java_ai_baseweight_baseweightsnap_MTMD_1Android_backend_1init(JNIEnv *env, jobje
         if (strcmp(hint, "opencl") == 0) {
             LOGi("Disabling Vulkan backend (using OpenCL instead)");
             setenv("GGML_DISABLE_VULKAN", "1", 1);
+        } else if (strcmp(hint, "hexagon") == 0) {
+            LOGi("Disabling Vulkan and OpenCL backends (using Hexagon NPU)");
+            setenv("GGML_DISABLE_VULKAN", "1", 1);
+            setenv("GGML_DISABLE_OPENCL", "1", 1);
         }
         env->ReleaseStringUTFChars(backend_hint, hint);
     }

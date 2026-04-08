@@ -87,7 +87,7 @@ class MainActivity : AppCompatActivity() {
         binding.btnCancelInput.setOnClickListener { hideTextInput() }
         binding.btnSubmitInput.setOnClickListener { submitTextInput() }
         binding.btnDismissResponse.setOnClickListener { hideResponseText() }
-        binding.btnSettings.setOnClickListener { openModelManager() }
+        binding.btnSettings.setOnClickListener { openSettings() }
 
         // Setup text input
         binding.promptInput.setOnEditorActionListener { _, actionId, _ ->
@@ -443,8 +443,8 @@ class MainActivity : AppCompatActivity() {
         cameraExecutor.shutdown()
     }
 
-    private fun openModelManager() {
-        val intent = Intent(this, ai.baseweight.baseweightsnap.ui.ModelManagerActivity::class.java)
+    private fun openSettings() {
+        val intent = Intent(this, ai.baseweight.baseweightsnap.ui.SettingsActivity::class.java)
         startActivity(intent)
     }
 
