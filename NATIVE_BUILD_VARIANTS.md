@@ -1,104 +1,68 @@
-# Native Library Variants
+# Native Build: Unified Single APK
 
-This project builds **two separate native library variants** to optimize performance based on device capabilities:
+The app ships **one APK** with all GPU/NPU backends and selects between them
+at runtime (Settings → GPU Backend, or auto-detection).
 
-## Variants
+## Backends
 
-### 1. CPU Variant (`libbaseweightsnap-cpu.so`)
-- **Optimizations**: NEON, KleidiAI, ARM dotprod instructions
-- **Use case**: Devices without Vulkan 1.2 support
-- **Target**: ARMv8.4-a+ with dotprod
+| Backend | How it's built | Target hardware |
+|---------|----------------|-----------------|
+| CPU | Statically, from the llama.cpp submodule | Fallback for all devices |
+| Vulkan | Statically, from the llama.cpp submodule | Non-Qualcomm GPUs (e.g. Pixel/Mali) |
+| OpenCL | Statically, from the llama.cpp submodule | Qualcomm Adreno GPUs |
+| Hexagon | Prebuilt dynamic backend (`scripts/build-hexagon.sh`) | Snapdragon NPU |
 
-### 2. Vulkan Variant (`libbaseweightsnap-vulkan.so`)
-- **Optimizations**: Vulkan GPU acceleration
-- **Use case**: Devices with Vulkan 1.2+ support
-- **Requirements**: Vulkan 1.2 hardware support
+## Runtime selection
 
-## Runtime Library Selection
+1. `BackendDetector.kt` picks a backend: the user's saved preference from
+   Settings, or auto-detection (`opencl` on Qualcomm SoCs, `vulkan` elsewhere).
+2. `MTMD_Android.kt` passes the hint to `backend_init()` in
+   `app/src/main/cpp/mtmd-android.cpp`, which:
+   - sets `ADSP_LIBRARY_PATH` to the native lib dir (for Hexagon DSP skels);
+   - disables unwanted statically linked backends via env vars read by the
+     ggml backend registry (`GGML_DISABLE_VULKAN` upstream,
+     `GGML_DISABLE_OPENCL` from `patches/llama.cpp/`);
+   - for `hexagon`, loads `libggml-hexagon.so` with `ggml_backend_load()`.
 
-The app automatically detects Vulkan support at runtime and loads the appropriate library:
+Changing the backend in Settings takes effect on the next app start (the
+backend registry is initialized once per process).
 
-1. **Detection** happens in `VulkanDetector.kt`:
-   - Checks for `FEATURE_VULKAN_HARDWARE_LEVEL`
-   - Verifies Vulkan 1.2+ version support
+## llama.cpp patches
 
-2. **Loading** happens in `MTMD_Android.kt`:
-   - Calls `VulkanDetector.getLibraryName(context)`
-   - Loads either `baseweightsnap-vulkan` or `baseweightsnap-cpu`
+`patches/llama.cpp/*.patch` are applied to the submodule automatically at
+CMake configure time (idempotent; see `app/src/main/cpp/CMakeLists.txt`).
+Current patches:
 
-## Building
+- `0001-ggml-add-GGML_DISABLE_OPENCL-env-gate.patch` — runtime opt-out for
+  the OpenCL backend, mirroring upstream's `GGML_DISABLE_VULKAN` gate.
+  Candidate for upstreaming to ggml-org/llama.cpp.
 
-### Option 1: Build Script (Recommended)
-```bash
-./build-native-variants.sh
-```
+## Hexagon prebuilt libraries
 
-This script:
-1. Builds the CPU variant with `BUILD_VARIANT=cpu`
-2. Builds the Vulkan variant with `BUILD_VARIANT=vulkan`
-3. Copies both `.so` files to `app/src/main/jniLibs/`
+`app/hexagon-only-libs/` is **gitignored** but packaged into the APK via
+`jniLibs.srcDirs`. It must contain, for `arm64-v8a`:
 
-### Option 2: Manual Build
+- `libggml-hexagon.so` — the dynamic ggml backend (its `libggml-base.so`
+  dependency resolves against the copy the app build already packages)
+- `libggml-htp-v{68,69,73,75,79,81}.so` — Hexagon DSP skels
 
-**CPU Variant:**
-```bash
-./gradlew clean
-./gradlew :app:externalNativeBuildDebug -DBUILD_VARIANT=cpu
-```
-
-**Vulkan Variant:**
-```bash
-./gradlew clean
-./gradlew :app:externalNativeBuildDebug -DBUILD_VARIANT=vulkan
-```
-
-Then manually copy the libraries from:
-```
-app/build/intermediates/cmake/debug/obj/arm64-v8a/
-```
-to:
-```
-app/src/main/jniLibs/arm64-v8a/
-```
-
-## CMake Configuration
-
-The `CMakeLists.txt` uses a `BUILD_VARIANT` option to control which library is built:
-
-- `BUILD_VARIANT=cpu`: Enables `GGML_CPU_KLEIDIAI`, disables `GGML_VULKAN`
-- `BUILD_VARIANT=vulkan`: Enables `GGML_VULKAN`, disables `GGML_CPU_KLEIDIAI`
-
-## Files Modified
-
-- **app/src/main/cpp/CMakeLists.txt** - Conditional build logic
-- **app/src/main/java/.../VulkanDetector.kt** - Runtime Vulkan detection
-- **app/src/main/java/.../MTMD_Android.kt** - Dynamic library loading
-- **app/build.gradle.kts** - Native build configuration
-- **build-native-variants.sh** - Automated build script
-
-## Testing
-
-To test which variant is loaded on a device, check logcat:
+Regenerate them after cloning or after bumping the llama.cpp submodule:
 
 ```bash
-adb logcat | grep VulkanDetector
+./scripts/build-hexagon.sh   # needs Docker; ~10-15 min
 ```
 
-You should see:
+The script builds inside Qualcomm's Snapdragon toolchain image at the exact
+submodule commit recorded by the superproject (dynamic backends are only
+ABI-compatible with the ggml they were built from) and copies the libraries
+into place. The CMake preset it uses is tracked at
+`scripts/snapdragon/CMakeUserPresets.json`.
+
+## Building the APK
+
+```bash
+./gradlew assembleDebug     # or assembleRelease
 ```
-I/VulkanDetector: Vulkan 1.2+ support: true/false
-I/VulkanDetector: Loading Vulkan-enabled library
-# or
-I/VulkanDetector: Loading CPU-optimized library (NEON/KleidiAI)
-```
 
-## Troubleshooting
-
-**Both libraries must be present in the APK:**
-- Ensure both `.so` files are in `app/src/main/jniLibs/arm64-v8a/`
-- Check the APK contents: `unzip -l app-debug.apk | grep libbaseweightsnap`
-
-**UnsatisfiedLinkError:**
-- Verify library names match exactly
-- Check that the correct ABI folder is used (arm64-v8a, x86_64, etc.)
-- Ensure all dependencies (like `libc++_shared.so`) are available
+No flavor/variant juggling — the single `externalNativeBuild` compiles
+llama.cpp with Vulkan + OpenCL, and the Hexagon libs ride along as prebuilts.

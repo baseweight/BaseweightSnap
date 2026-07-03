@@ -45,6 +45,31 @@ if(ANDROID_ABI STREQUAL "arm64-v8a")
 endif()
 
 # =============================================================================
+# Local patches to the llama.cpp submodule (see patches/llama.cpp/)
+# Applied at configure time; idempotent via reverse-check.
+# =============================================================================
+set(LLAMA_PATCH_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../../../../patches/llama.cpp)
+file(GLOB LLAMA_PATCHES ${LLAMA_PATCH_DIR}/*.patch)
+list(SORT LLAMA_PATCHES)
+foreach(patch ${LLAMA_PATCHES})
+    execute_process(
+            COMMAND git apply --reverse --check ${patch}
+            WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/llama.cpp
+            RESULT_VARIABLE PATCH_NOT_APPLIED
+            OUTPUT_QUIET ERROR_QUIET)
+    if(PATCH_NOT_APPLIED)
+        execute_process(
+                COMMAND git apply ${patch}
+                WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/llama.cpp
+                RESULT_VARIABLE PATCH_FAILED)
+        if(PATCH_FAILED)
+            message(FATAL_ERROR "Failed to apply ${patch} to llama.cpp submodule")
+        endif()
+        message(STATUS "Applied ${patch} to llama.cpp submodule")
+    endif()
+endforeach()
+
+# =============================================================================
 # Build llama.cpp from source (includes ggml with Vulkan + OpenCL backends)
 # =============================================================================
 add_subdirectory(llama.cpp build-llama)

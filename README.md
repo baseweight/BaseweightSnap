@@ -30,14 +30,20 @@ The goal of this application is to show that it's possible to run Multimodal mod
 - `app/src/main/cpp/` - Native C++ code
 - `app/src/main/java/` - Kotlin/Java source code
 - External dependencies:
-- llama.cpp - symlinked into the `app/src/main/cpp` directory
+  - llama.cpp - git submodule at `app/src/main/cpp/llama.cpp` (local patches
+    in `patches/llama.cpp/` are applied automatically at configure time)
 
 ## Building the Project
 
-1. Clone the repository
-2. Symlink the llama.cpp repository in `app/src/main/cpp`
+1. Clone the repository with submodules:
+   `git clone --recurse-submodules <repo>` (or `git submodule update --init --recursive`)
+2. Build the Hexagon NPU backend prebuilts (needs Docker):
+   `./scripts/build-hexagon.sh`
 3. Sync the project with Gradle files
 4. Build and run the application.
+
+The APK is a single unified build with runtime GPU backend selection
+(Vulkan / OpenCL / Hexagon) — see `NATIVE_BUILD_VARIANTS.md` for details.
 
 ## License
 

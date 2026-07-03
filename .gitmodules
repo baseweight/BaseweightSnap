@@ -1,6 +1,9 @@
 [submodule "app/src/main/cpp/llama.cpp"]
 	path = app/src/main/cpp/llama.cpp
 	url = https://github.com/ggml-org/llama.cpp.git
+	# The app build applies patches/llama.cpp/ and copies the Snapdragon
+	# preset into the submodule at configure time; don't report that noise.
+	ignore = dirty
 [submodule "third_party/Vulkan-Headers"]
 	path = third_party/Vulkan-Headers
 	url = https://github.com/KhronosGroup/Vulkan-Headers.git

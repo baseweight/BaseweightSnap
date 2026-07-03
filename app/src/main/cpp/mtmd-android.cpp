@@ -14,6 +14,7 @@
 #include <unistd.h>
 #include <cstdlib>
 #include "llama.h"
+#include "ggml-backend.h"
 #include "common.h"
 #include "mtmd.h"
 #include "mtmd-helper.h"
@@ -180,15 +181,19 @@ Java_ai_baseweight_baseweightsnap_MTMD_1Android_process_1image(
 extern "C"
 JNIEXPORT void JNICALL
 Java_ai_baseweight_baseweightsnap_MTMD_1Android_backend_1init(JNIEnv *env, jobject, jstring native_lib_dir, jstring backend_hint) {
+    std::string lib_dir;
     if (native_lib_dir) {
         const char *path = env->GetStringUTFChars(native_lib_dir, nullptr);
-        LOGi("Setting ADSP_LIBRARY_PATH=%s", path);
-        setenv("ADSP_LIBRARY_PATH", path, 1);
+        lib_dir = path;
         env->ReleaseStringUTFChars(native_lib_dir, path);
+        LOGi("Setting ADSP_LIBRARY_PATH=%s", lib_dir.c_str());
+        setenv("ADSP_LIBRARY_PATH", lib_dir.c_str(), 1);
     }
 
     // Disable Vulkan on devices where it crashes (e.g. Adreno GPUs).
-    // The ggml backend registry checks GGML_DISABLE_VULKAN at startup.
+    // The ggml backend registry checks GGML_DISABLE_VULKAN at startup;
+    // GGML_DISABLE_OPENCL comes from patches/llama.cpp.
+    bool use_hexagon = false;
     if (backend_hint) {
         const char *hint = env->GetStringUTFChars(backend_hint, nullptr);
         LOGi("Backend hint: %s", hint);
@@ -199,8 +204,21 @@ Java_ai_baseweight_baseweightsnap_MTMD_1Android_backend_1init(JNIEnv *env, jobje
             LOGi("Disabling Vulkan and OpenCL backends (using Hexagon NPU)");
             setenv("GGML_DISABLE_VULKAN", "1", 1);
             setenv("GGML_DISABLE_OPENCL", "1", 1);
+            use_hexagon = true;
         }
         env->ReleaseStringUTFChars(backend_hint, hint);
+    }
+
+    if (use_hexagon && !lib_dir.empty()) {
+        // The Hexagon backend ships as a dynamic ggml backend (GGML_BACKEND_DL)
+        // in the APK's native lib dir, next to the libggml-htp-v*.so DSP
+        // skels that FastRPC finds via ADSP_LIBRARY_PATH.
+        std::string hexagon_lib = lib_dir + "/libggml-hexagon.so";
+        LOGi("Loading Hexagon backend from %s", hexagon_lib.c_str());
+        ggml_backend_reg_t reg = ggml_backend_load(hexagon_lib.c_str());
+        if (reg == nullptr) {
+            LOGe("Failed to load Hexagon backend from %s; falling back to CPU", hexagon_lib.c_str());
+        }
     }
 
     llama_backend_init();

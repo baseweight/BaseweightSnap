@@ -1,42 +1,52 @@
 #!/bin/bash
-# Hexagon Build Script for BaseweightSnap
-# Run this on your host machine (not in Docker)
+# Build the Hexagon NPU dynamic ggml backend for BaseweightSnap.
+#
+# The unified APK builds the Vulkan and OpenCL backends statically from the
+# llama.cpp submodule (see app/src/main/cpp/CMakeLists.txt). The Hexagon
+# backend needs Qualcomm's Snapdragon toolchain, so it is built here inside
+# their Docker image and shipped as prebuilt dynamic backend libraries in
+# app/hexagon-only-libs/ (gitignored — rerun this script after cloning or
+# after bumping the llama.cpp submodule).
+#
+# The dynamically loaded backend must match the statically linked ggml, so
+# this script refuses to build unless the submodule checkout matches the
+# commit recorded in the superproject.
 
 set -e
+cd "$(dirname "$0")/.."
 
-echo "================================================"
-echo "Building BaseweightSnap with Hexagon NPU support"
-echo "================================================"
-echo ""
-
-# Configuration
-LLAMA_COMMIT="6a8cf8914"  # Pin to known-good commit
 DOCKER_IMAGE="ghcr.io/snapdragon-toolchain/arm64-android:v0.3"
-BUILD_DIR="app/src/main/cpp/llama.cpp"
+SUBMODULE="app/src/main/cpp/llama.cpp"
 OUTPUT_DIR="hexagon-libs"
+JNILIBS_DIR="app/hexagon-only-libs/arm64-v8a"
 
-# Check if llama.cpp submodule is at correct commit
-cd "$BUILD_DIR"
-CURRENT_COMMIT=$(git rev-parse --short HEAD)
-if [ "$CURRENT_COMMIT" != "$LLAMA_COMMIT" ]; then
-    echo "⚠️  Warning: llama.cpp is at $CURRENT_COMMIT, expected $LLAMA_COMMIT"
-    echo "Checking out pinned commit..."
-    git fetch origin
-    git checkout "$LLAMA_COMMIT"
-fi
-cd ../../../../../
-
-echo "✓ llama.cpp pinned to commit: $LLAMA_COMMIT"
+echo "================================================"
+echo "Building Hexagon NPU backend for BaseweightSnap"
+echo "================================================"
 echo ""
 
-# Create output directory
+# The prebuilt backend is only ABI-compatible with the exact ggml it was
+# built from, so enforce the submodule commit recorded in the superproject.
+EXPECTED_COMMIT=$(git ls-tree HEAD "$SUBMODULE" | awk '{print $3}')
+CURRENT_COMMIT=$(git -C "$SUBMODULE" rev-parse HEAD)
+if [ "$EXPECTED_COMMIT" != "$CURRENT_COMMIT" ]; then
+    echo "❌ llama.cpp submodule is at $CURRENT_COMMIT"
+    echo "   but the superproject records $EXPECTED_COMMIT."
+    echo "   Run: git submodule update --init $SUBMODULE"
+    exit 1
+fi
+echo "✓ llama.cpp submodule at recorded commit: $CURRENT_COMMIT"
+echo ""
+
+# Snapdragon CMake preset (tracked in-repo so it survives submodule updates)
+cp scripts/snapdragon/CMakeUserPresets.json "$SUBMODULE/CMakeUserPresets.json"
+
 mkdir -p "$OUTPUT_DIR"
 
 echo "🐳 Running Docker build with Snapdragon toolchain..."
 echo "This will take 10-15 minutes..."
 echo ""
 
-# Run Docker build
 docker run --rm \
     -u $(id -u):$(id -g) \
     -v $(pwd):/workspace \
@@ -44,77 +54,54 @@ docker run --rm \
     "$DOCKER_IMAGE" \
     bash -c "
         set -e
-        echo 'Inside Docker container...'
-        cd /workspace/$BUILD_DIR
-        
-        # Copy Snapdragon preset
-        echo 'Setting up CMake preset...'
-        cp docs/backend/snapdragon/CMakeUserPresets.json .
-        
-        # Configure build with Hexagon + OpenCL + mtmd
+        cd /workspace/$SUBMODULE
+
         echo 'Configuring CMake...'
         cmake --preset arm64-android-snapdragon-release \
             -B build-hexagon \
-            -DLLAMA_BUILD_TOOLS=ON \
+            -DLLAMA_CURL=OFF \
+            -DLLAMA_BUILD_TOOLS=OFF \
             -DLLAMA_BUILD_EXAMPLES=OFF \
             -DLLAMA_BUILD_TESTS=OFF
-        
-        # Build everything
-        echo 'Building llama.cpp with Hexagon...'
+
+        echo 'Building ggml with Hexagon backend...'
         cmake --build build-hexagon -j\$(nproc)
-        
-        # Install to output dir
+
         echo 'Installing libraries...'
         cmake --install build-hexagon \
             --prefix /workspace/$OUTPUT_DIR \
             --strip
-        
-        echo '✓ Build complete!'
     "
 
 echo ""
-echo "📦 Copying additional files..."
+echo "📦 Copying backend libraries into $JNILIBS_DIR ..."
+mkdir -p "$JNILIBS_DIR"
 
-# Copy headers needed for compilation
-cp -r "$BUILD_DIR/include" "$OUTPUT_DIR/" 2>/dev/null || true
-cp -r "$BUILD_DIR/common" "$OUTPUT_DIR/include/" 2>/dev/null || true
-cp -r "$BUILD_DIR/tools/mtmd" "$OUTPUT_DIR/include/" 2>/dev/null || true
-cp -r "$BUILD_DIR/ggml/include" "$OUTPUT_DIR/" 2>/dev/null || true
-
-# Create CMake config file for find_package
-cat > "$OUTPUT_DIR/llama-config.cmake" << 'EOF'
-# Config file for find_package(llama)
-get_filename_component(LLAMA_CMAKE_DIR "${CMAKE_CURRENT_LIST_FILE}" PATH)
-
-set(LLAMA_INCLUDE_DIRS "${LLAMA_CMAKE_DIR}/include")
-set(LLAMA_LIBRARIES "${LLAMA_CMAKE_DIR}/lib/libllama.so")
-
-include("${LLAMA_CMAKE_DIR}/llama-targets.cmake" OPTIONAL)
-EOF
-
-# Create mtmd config
-cat > "$OUTPUT_DIR/mtmd-config.cmake" << 'EOF'
-get_filename_component(MTMD_CMAKE_DIR "${CMAKE_CURRENT_LIST_FILE}" PATH)
-set(MTMD_INCLUDE_DIRS "${MTMD_CMAKE_DIR}/include")
-set(MTMD_LIBRARIES "${MTMD_CMAKE_DIR}/lib/libmtmd.so")
-EOF
+# libggml-hexagon.so — the dynamic backend, loaded via ggml_backend_load().
+#   Its libggml-base.so dependency is NOT copied: the APK already ships the
+#   one built by the app's own externalNativeBuild from the same submodule
+#   commit, and the dynamic linker resolves against it (single ggml registry).
+# libggml-htp-v*.so — Hexagon DSP skels, found via ADSP_LIBRARY_PATH
+copied=0
+for lib in libggml-hexagon.so; do
+    src=$(find "$OUTPUT_DIR/bin" "$OUTPUT_DIR/lib" -name "$lib" 2>/dev/null | head -1)
+    if [ -z "$src" ]; then
+        echo "❌ $lib not found in $OUTPUT_DIR — build output layout changed?"
+        exit 1
+    fi
+    cp "$src" "$JNILIBS_DIR/"
+    copied=$((copied + 1))
+done
+for src in "$OUTPUT_DIR"/lib/libggml-htp-v*.so; do
+    cp "$src" "$JNILIBS_DIR/"
+    copied=$((copied + 1))
+done
 
 echo ""
 echo "================================================"
-echo "✅ Hexagon build complete!"
+echo "✅ Hexagon backend build complete ($copied libs)"
 echo "================================================"
+ls -la "$JNILIBS_DIR"
 echo ""
-echo "Built libraries:"
-ls -la "$OUTPUT_DIR/lib/"*.so 2>/dev/null || echo "  (none found)"
-echo ""
-echo "Directory structure:"
-echo "  hexagon-libs/"
-echo "    ├── lib/          ← .so files (copy to jniLibs/arm64-v8a/)"
-echo "    ├── include/      ← headers"
-echo "    └── *.cmake       ← CMake configs"
-echo ""
-echo "Next steps:"
-echo "  1. git checkout -b hexagon-build"
-echo "  2. Update app/src/main/cpp/CMakeLists.txt"
-echo "  3. Build APK: ./gradlew assembleRelease"
-echo ""
+echo "These are packaged into the APK via jniLibs.srcDirs (app/build.gradle.kts)."
+echo "Build the APK as usual: ./gradlew assembleRelease"
